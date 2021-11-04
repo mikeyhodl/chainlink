@@ -1127,7 +1127,7 @@ func (ec *EthConfirmer) EnsureConfirmedTransactionsInLongestChain(ctx context.Co
 	}
 
 	for _, etx := range etxs {
-		if !hasReceiptInLongestChain(etx, head) {
+		if !hasReceiptInLongestChain(etx, &head) {
 			if err := ec.markForRebroadcast(etx, head); err != nil {
 				return errors.Wrapf(err, "markForRebroadcast failed for etx %v", etx.ID)
 			}
@@ -1173,7 +1173,7 @@ func findTransactionsConfirmedInBlockRange(db *gorm.DB, highBlockNumber, lowBloc
 	return etxs, errors.Wrap(err, "findTransactionsConfirmedInBlockRange failed")
 }
 
-func hasReceiptInLongestChain(etx EthTx, head eth.Head) bool {
+func hasReceiptInLongestChain(etx EthTx, head *eth.Head) bool {
 	for {
 		for _, attempt := range etx.EthTxAttempts {
 			for _, receipt := range attempt.EthReceipts {
@@ -1185,7 +1185,7 @@ func hasReceiptInLongestChain(etx EthTx, head eth.Head) bool {
 		if head.Parent == nil {
 			return false
 		}
-		head = *head.Parent
+		head = head.Parent
 	}
 }
 

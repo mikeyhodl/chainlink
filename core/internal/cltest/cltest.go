@@ -1518,6 +1518,7 @@ func (b *Blocks) NewHead(number uint64) *eth.Head {
 		ParentHash: parent.Hash,
 		Parent:     parent,
 		Timestamp:  time.Unix(parent.Number+1, 0),
+		EVMChainID: utils.NewBig(&FixtureChainID),
 	}
 	return head
 }
@@ -1529,7 +1530,7 @@ func NewBlocks(t *testing.T, numHashes int) *Blocks {
 		hash := utils.NewHash()
 		hashes = append(hashes, hash)
 
-		heads[i] = &eth.Head{Hash: hash, Number: i, Timestamp: time.Unix(i, 0)}
+		heads[i] = &eth.Head{Hash: hash, Number: i, Timestamp: time.Unix(i, 0), EVMChainID: utils.NewBig(&FixtureChainID)}
 		if i > 0 {
 			parent := heads[i-1]
 			heads[i].Parent = parent
@@ -1570,6 +1571,7 @@ func (hb *HeadBuffer) Append(head *eth.Head) {
 		ParentHash: head.ParentHash,
 		Parent:     head.Parent,
 		Timestamp:  time.Unix(int64(len(hb.Heads)), 0),
+		EVMChainID: utils.New(head.EVMChainID),
 	}
 	hb.Heads = append(hb.Heads, cloned)
 }

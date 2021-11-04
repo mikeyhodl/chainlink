@@ -256,7 +256,15 @@ func (client *client) SubscribeFilterLogs(ctx context.Context, q ethereum.Filter
 }
 
 func (client *client) SubscribeNewHead(ctx context.Context, ch chan<- *Head) (ethereum.Subscription, error) {
-	return client.pool.EthSubscribe(ctx, ch, "newHeads")
+	ch2 := make(chan *Head)
+	go func() {
+		defer close(ch)
+		for h := range ch2 {
+			h.EVMChainID = utils.NewBig(client.chainID)
+			ch <- h
+		}
+	}()
+	return client.pool.EthSubscribe(ctx, ch2, "newHeads")
 }
 
 func (client *client) EthSubscribe(ctx context.Context, channel interface{}, args ...interface{}) (ethereum.Subscription, error) {
