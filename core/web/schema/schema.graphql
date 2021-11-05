@@ -10,6 +10,7 @@ type Query {
     bridges(offset: Int, limit: Int): BridgesPayload!
     chain(id: ID!): Chain!
     chains(offset: Int, limit: Int): [Chain!]!
+    csaKeys: CSAKeysPayload!
     features: FeaturesPayload!
     feedsManager(id: ID!): FeedsManagerPayload!
     feedsManagers: FeedsManagersPayload!
@@ -19,6 +20,7 @@ type Query {
 
 type Mutation {
     createBridge(input: CreateBridgeInput!): CreateBridgePayload!
+    createCSAKey: CreateCSAKeyPayload!
     createFeedsManager(input: CreateFeedsManagerInput!): CreateFeedsManagerPayload!
     createOCRKeyBundle: CreateOCRKeyBundlePayload!
     createP2PKey: CreateP2PKeyPayload!

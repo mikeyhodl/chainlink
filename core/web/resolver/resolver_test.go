@@ -28,6 +28,7 @@ type mocks struct {
 	feedsSvc  *feedsMocks.Service
 	cfg       *configMocks.GeneralConfig
 	ocr       *keystoreMocks.OCR
+	csa       *keystoreMocks.CSA
 	keystore  *keystoreMocks.Master
 	p2p       *keystoreMocks.P2P
 }
@@ -70,6 +71,7 @@ func setupFramework(t *testing.T) *gqlTestFramework {
 		feedsSvc:  &feedsMocks.Service{},
 		cfg:       &configMocks.GeneralConfig{},
 		ocr:       &keystoreMocks.OCR{},
+		csa:       &keystoreMocks.CSA{},
 		keystore:  &keystoreMocks.Master{},
 		p2p:       &keystoreMocks.P2P{},
 	}
@@ -83,6 +85,7 @@ func setupFramework(t *testing.T) *gqlTestFramework {
 			m.feedsSvc,
 			m.cfg,
 			m.ocr,
+			m.csa,
 			m.keystore,
 			m.p2p,
 		)
