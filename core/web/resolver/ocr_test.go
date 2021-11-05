@@ -10,7 +10,7 @@ import (
 	"github.com/smartcontractkit/chainlink/core/services/keystore/keys/ocrkey"
 )
 
-func TestOCR(t *testing.T) {
+func TestResolver_GetOCRKeyBundles(t *testing.T) {
 	t.Parallel()
 
 	query := `
@@ -66,7 +66,7 @@ func TestOCR(t *testing.T) {
 	RunGQLTests(t, testCases)
 }
 
-func TestOCRCreateBundle(t *testing.T) {
+func TestResolver_OCRCreateBundle(t *testing.T) {
 	t.Parallel()
 
 	mutation := `
@@ -116,7 +116,7 @@ func TestOCRCreateBundle(t *testing.T) {
 	RunGQLTests(t, testCases)
 }
 
-func TestOCRDeleteBundle(t *testing.T) {
+func TestResolver_OCRDeleteBundle(t *testing.T) {
 	t.Parallel()
 
 	fakeKey, err := ocrkey.NewV2()
