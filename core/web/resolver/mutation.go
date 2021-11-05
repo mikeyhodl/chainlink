@@ -3,12 +3,12 @@ package resolver
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"net/url"
 	"strconv"
 
 	"github.com/graph-gophers/graphql-go"
 	"github.com/lib/pq"
+	"github.com/pkg/errors"
 	"gopkg.in/guregu/null.v4"
 
 	"github.com/smartcontractkit/chainlink/core/assets"
@@ -17,6 +17,7 @@ import (
 	"github.com/smartcontractkit/chainlink/core/services/feeds"
 	"github.com/smartcontractkit/chainlink/core/services/keystore"
 	"github.com/smartcontractkit/chainlink/core/services/keystore/keys/ocrkey"
+	"github.com/smartcontractkit/chainlink/core/services/keystore/keys/p2pkey"
 	"github.com/smartcontractkit/chainlink/core/store/models"
 	"github.com/smartcontractkit/chainlink/core/utils/crypto"
 )
@@ -292,4 +293,35 @@ func (r *Resolver) DeleteOCRKeyBundle(ctx context.Context, args struct {
 	}
 
 	return NewDeleteOCRKeyBundlePayloadResolver(deletedKey, nil), nil
+}
+
+func (r *Resolver) CreateP2PKey(ctx context.Context) (*CreateP2PKeyPayloadResolver, error) {
+	if err := authenticateUser(ctx); err != nil {
+		return nil, err
+	}
+
+	key, err := r.App.GetKeyStore().P2P().Create()
+	if err != nil {
+		return nil, err
+	}
+
+	return NewCreateP2PKeyPayloadResolver(key), nil
+}
+
+func (r *Resolver) DeleteP2PKey(ctx context.Context, args struct {
+	ID string
+}) (*DeleteP2PKeyPayloadResolver, error) {
+	if err := authenticateUser(ctx); err != nil {
+		return nil, err
+	}
+
+	key, err := r.App.GetKeyStore().P2P().Delete(p2pkey.PeerID(args.ID))
+	if err != nil {
+		if errors.Cause(err) == keystore.ErrMissingP2PKey {
+			return NewDeleteP2PKeyPayloadResolver(p2pkey.KeyV2{}, err), nil
+		}
+		return nil, err
+	}
+
+	return NewDeleteP2PKeyPayloadResolver(key, nil), nil
 }

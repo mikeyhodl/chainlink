@@ -29,6 +29,7 @@ type mocks struct {
 	cfg       *configMocks.GeneralConfig
 	ocr       *keystoreMocks.OCR
 	keystore  *keystoreMocks.Master
+	p2p       *keystoreMocks.P2P
 }
 
 // gqlTestFramework is a framework wrapper containing the objects needed to run
@@ -70,6 +71,7 @@ func setupFramework(t *testing.T) *gqlTestFramework {
 		cfg:       &configMocks.GeneralConfig{},
 		ocr:       &keystoreMocks.OCR{},
 		keystore:  &keystoreMocks.Master{},
+		p2p:       &keystoreMocks.P2P{},
 	}
 
 	// Assert expectations for any mocks that we set up
@@ -82,6 +84,7 @@ func setupFramework(t *testing.T) *gqlTestFramework {
 			m.cfg,
 			m.ocr,
 			m.keystore,
+			m.p2p,
 		)
 	})
 

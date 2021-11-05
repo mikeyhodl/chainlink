@@ -152,3 +152,16 @@ func (r *Resolver) Features(ctx context.Context) (*FeaturesPayloadResolver, erro
 
 	return NewFeaturesPayloadResolver(r.App.GetConfig()), nil
 }
+
+func (r *Resolver) P2PKeys(ctx context.Context) (*P2PKeysPayloadResolver, error) {
+	if err := authenticateUser(ctx); err != nil {
+		return nil, err
+	}
+
+	p2pKeys, err := r.App.GetKeyStore().P2P().GetAll()
+	if err != nil {
+		return nil, err
+	}
+
+	return NewP2PKeysPayloadResolver(p2pKeys), nil
+}

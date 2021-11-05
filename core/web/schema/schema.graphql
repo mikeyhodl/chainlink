@@ -14,13 +14,16 @@ type Query {
     feedsManager(id: ID!): FeedsManagerPayload!
     feedsManagers: FeedsManagersPayload!
     ocrKeyBundles: OCRKeyBundlesPayload!
+    p2pKeys: P2PKeysPayload!
 }
 
 type Mutation {
     createBridge(input: CreateBridgeInput!): CreateBridgePayload!
     createFeedsManager(input: CreateFeedsManagerInput!): CreateFeedsManagerPayload!
     createOCRKeyBundle: CreateOCRKeyBundlePayload!
+    createP2PKey: CreateP2PKeyPayload!
     deleteOCRKeyBundle(id: String!): DeleteOCRKeyBundlePayload!
+    deleteP2PKey(id: String!): DeleteP2PKeyPayload!
     updateBridge(name: String!, input: UpdateBridgeInput!): UpdateBridgePayload!
     updateFeedsManager(id: ID!, input: UpdateFeedsManagerInput!): UpdateFeedsManagerPayload!
 }
