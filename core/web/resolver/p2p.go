@@ -1,23 +1,25 @@
 package resolver
 
-import "github.com/smartcontractkit/chainlink/core/services/keystore/keys/p2pkey"
+import (
+	"github.com/graph-gophers/graphql-go"
+
+	"github.com/smartcontractkit/chainlink/core/services/keystore/keys/p2pkey"
+)
 
 type P2PKey struct {
-	id        string
-	peerID    string
-	publicKey string
+	key p2pkey.KeyV2
 }
 
-func (k P2PKey) ID() string {
-	return k.id
+func (k P2PKey) ID() graphql.ID {
+	return graphql.ID(k.key.ID())
 }
 
 func (k P2PKey) PeerID() string {
-	return k.peerID
+	return k.key.PeerID().String()
 }
 
 func (k P2PKey) PublicKey() string {
-	return k.publicKey
+	return k.key.PublicKeyHex()
 }
 
 type P2PKeysPayloadResolver struct {
@@ -31,11 +33,7 @@ func NewP2PKeysPayloadResolver(keys []p2pkey.KeyV2) *P2PKeysPayloadResolver {
 func (r *P2PKeysPayloadResolver) Results() []P2PKey {
 	results := []P2PKey{}
 	for _, k := range r.keys {
-		results = append(results, P2PKey{
-			id:        k.ID(),
-			peerID:    k.PeerID().String(),
-			publicKey: k.PublicKeyHex(),
-		})
+		results = append(results, P2PKey{k})
 	}
 	return results
 }
@@ -49,11 +47,7 @@ func NewCreateP2PKeyPayloadResolver(key p2pkey.KeyV2) *CreateP2PKeyPayloadResolv
 }
 
 func (r *CreateP2PKeyPayloadResolver) Key() P2PKey {
-	return P2PKey{
-		id:        r.key.ID(),
-		peerID:    r.key.PeerID().String(),
-		publicKey: r.key.PublicKeyHex(),
-	}
+	return P2PKey{r.key}
 }
 
 type DeleteP2PKeySuccessResolver struct {
@@ -65,11 +59,7 @@ func NewDeleteP2PKeySuccessResolver(key p2pkey.KeyV2) *DeleteP2PKeySuccessResolv
 }
 
 func (r *DeleteP2PKeySuccessResolver) Key() P2PKey {
-	return P2PKey{
-		id:        r.key.ID(),
-		peerID:    r.key.PeerID().String(),
-		publicKey: r.key.PublicKeyHex(),
-	}
+	return P2PKey{r.key}
 }
 
 type DeleteP2PKeyPayloadResolver struct {

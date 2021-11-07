@@ -120,7 +120,7 @@ func TestResolver_DeleteP2PKey(t *testing.T) {
 	assert.NoError(t, err)
 
 	query := `
-		mutation DeleteP2PKey($id: String!) {
+		mutation DeleteP2PKey($id: ID!) {
 			deleteP2PKey(id: $id) {
 				... on DeleteP2PKeySuccess {
 					key {

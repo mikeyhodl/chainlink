@@ -1,5 +1,5 @@
 type P2PKey {
-    id: String!
+    id: ID!
     peerId: String!
     publicKey: String!
 }

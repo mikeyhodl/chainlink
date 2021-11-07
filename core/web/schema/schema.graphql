@@ -25,7 +25,7 @@ type Mutation {
     createOCRKeyBundle: CreateOCRKeyBundlePayload!
     createP2PKey: CreateP2PKeyPayload!
     deleteOCRKeyBundle(id: String!): DeleteOCRKeyBundlePayload!
-    deleteP2PKey(id: String!): DeleteP2PKeyPayload!
+    deleteP2PKey(id: ID!): DeleteP2PKeyPayload!
     updateBridge(name: String!, input: UpdateBridgeInput!): UpdateBridgePayload!
     updateFeedsManager(id: ID!, input: UpdateFeedsManagerInput!): UpdateFeedsManagerPayload!
 }
