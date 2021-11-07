@@ -326,7 +326,7 @@ func (r *Resolver) CreateP2PKey(ctx context.Context) (*CreateP2PKeyPayloadResolv
 }
 
 func (r *Resolver) DeleteP2PKey(ctx context.Context, args struct {
-	ID string
+	ID graphql.ID
 }) (*DeleteP2PKeyPayloadResolver, error) {
 	if err := authenticateUser(ctx); err != nil {
 		return nil, err
