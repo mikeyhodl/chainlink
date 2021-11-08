@@ -191,6 +191,18 @@ it('handles input errors', async () => {
         },
       },
     },
+    {
+      request: {
+        query: FEEDS_MANAGERS_QUERY,
+      },
+      result: {
+        data: {
+          feedsManagers: {
+            results: [],
+          },
+        },
+      },
+    },
   ]
 
   renderComponent(mocks)

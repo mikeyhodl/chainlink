@@ -19,8 +19,8 @@ it('renders the error', async () => {
   const graphQLErrors = [new GraphQLError('Something went wrong with GraphQL')]
   const errorMessage = 'this is an error message'
   const apolloError = new ApolloError({
-    graphQLErrors: graphQLErrors,
-    errorMessage: errorMessage,
+    graphQLErrors,
+    errorMessage,
   })
 
   render(<ErrorHandler error={apolloError} />)
@@ -42,8 +42,8 @@ it('redirects when the error is unauthorized', async () => {
   ]
   const errorMessage = 'Unauthorized'
   const apolloError = new ApolloError({
-    graphQLErrors: graphQLErrors,
-    errorMessage: errorMessage,
+    graphQLErrors,
+    errorMessage,
   })
 
   renderWithRouter(

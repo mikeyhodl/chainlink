@@ -229,7 +229,7 @@ it('handles a not found error', async () => {
   expect(await findByText('feeds manager not found')).toBeInTheDocument()
 })
 
-it('handles a input errors', async () => {
+it('handles input errors', async () => {
   const mgr = buildFeedsManager()
 
   const mocks: MockedResponse[] = [
@@ -271,6 +271,18 @@ it('handles a input errors', async () => {
                 path: 'input/publicKey',
               },
             ],
+          },
+        },
+      },
+    },
+    {
+      request: {
+        query: FEEDS_MANAGERS_QUERY,
+      },
+      result: {
+        data: {
+          feedsManagers: {
+            results: [mgr],
           },
         },
       },
