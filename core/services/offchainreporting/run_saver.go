@@ -1,8 +1,6 @@
 package offchainreporting
 
 import (
-	"github.com/smartcontractkit/chainlink/core/shutdown"
-
 	"github.com/smartcontractkit/chainlink/core/logger"
 	"github.com/smartcontractkit/chainlink/core/services/pipeline"
 	"github.com/smartcontractkit/chainlink/core/utils"

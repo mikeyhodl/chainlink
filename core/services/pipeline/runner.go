@@ -3,7 +3,6 @@ package pipeline
 import (
 	"context"
 	"fmt"
-	"runtime/debug"
 	"sort"
 	"sync"
 	"time"
