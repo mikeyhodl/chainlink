@@ -19,7 +19,7 @@ export const FEEDS_MANAGERS_QUERY = gql`
   }
 `
 
-export const useFetchFeedsManagers = () => {
+export const useFeedsManagersQuery = () => {
   const response = useQuery<FetchFeedsManagers, FetchFeedsManagersVariables>(
     FEEDS_MANAGERS_QUERY,
   )
