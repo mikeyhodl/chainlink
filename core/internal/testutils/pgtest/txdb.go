@@ -15,6 +15,10 @@ import (
 	"github.com/pkg/errors"
 )
 
+// txdb is a simplified version of https://github.com/DATA-DOG/go-txdb
+// The original lib has various problems and is harder to understand because it tries to be more general
+// This version is very tightly focused and should be easier to reason about and less likely to have subtle bugs/races
+
 func init() {
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
