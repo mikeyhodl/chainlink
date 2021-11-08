@@ -200,13 +200,13 @@ func (c *conn) Close() (err error) {
 
 	c.opened--
 	if c.opened == 0 {
-		c.closed = true
 		if c.tx != nil {
 			if err := c.tx.Rollback(); err != nil {
 				panic(err)
 			}
 			c.tx = nil
 		}
+		c.closed = true
 		if err := c.removeSelf(); err != nil {
 			panic(err)
 		}
