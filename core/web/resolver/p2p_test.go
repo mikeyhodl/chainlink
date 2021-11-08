@@ -2,6 +2,7 @@ package resolver
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/pkg/errors"
@@ -142,6 +143,9 @@ func TestResolver_DeleteP2PKey(t *testing.T) {
 		"id": fakeKey.ID(),
 	}
 
+	peerID, err := p2pkey.MakePeerID(fakeKey.ID())
+	assert.NoError(t, err)
+
 	d, err := json.Marshal(map[string]interface{}{
 		"deleteP2PKey": map[string]interface{}{
 			"key": map[string]interface{}{
@@ -160,7 +164,7 @@ func TestResolver_DeleteP2PKey(t *testing.T) {
 			name:          "success",
 			authenticated: true,
 			before: func(f *gqlTestFramework) {
-				f.Mocks.p2p.On("Delete", p2pkey.PeerID(fakeKey.ID())).Return(fakeKey, nil)
+				f.Mocks.p2p.On("Delete", peerID).Return(fakeKey, nil)
 				f.Mocks.keystore.On("P2P").Return(f.Mocks.p2p)
 				f.App.On("GetKeyStore").Return(f.Mocks.keystore)
 			},
@@ -173,12 +177,13 @@ func TestResolver_DeleteP2PKey(t *testing.T) {
 			authenticated: true,
 			before: func(f *gqlTestFramework) {
 				f.Mocks.p2p.
-					On("Delete", p2pkey.PeerID(fakeKey.ID())).
+					On("Delete", peerID).
 					Return(
 						p2pkey.KeyV2{},
-						errors.Wrap(
+						errors.Wrapf(
 							keystore.ErrMissingP2PKey,
-							"unable to find P2P key with id helloWorld",
+							"unable to find P2P key with id %s",
+							fakeKey.ID(),
 						),
 					)
 				f.Mocks.keystore.On("P2P").Return(f.Mocks.p2p)
@@ -186,12 +191,12 @@ func TestResolver_DeleteP2PKey(t *testing.T) {
 			},
 			query:     query,
 			variables: variables,
-			result: `{
+			result: fmt.Sprintf(`{
 				"deleteP2PKey": {
 					"code":"NOT_FOUND",
-					"message":"unable to find P2P key with id helloWorld: unable to find P2P key"
+					"message":"unable to find P2P key with id %s: unable to find P2P key"
 				}
-			}`,
+			}`, fakeKey.ID()),
 		},
 	}
 
