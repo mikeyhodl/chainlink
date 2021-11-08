@@ -11,8 +11,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/jmoiron/sqlx"
 	"github.com/pkg/errors"
+	"github.com/smartcontractkit/sqlx"
 )
 
 // txdb is a simplified version of https://github.com/DATA-DOG/go-txdb
@@ -114,6 +114,20 @@ func (d *txDriver) deleteConn(dsn string) error {
 	return nil
 }
 
+type tx struct {
+	tx *sql.Tx
+}
+
+func (tx tx) Commit() error {
+	// Commit is a noop because the transaction will be rolled back at the end
+	return nil
+}
+
+func (tx tx) Rollback() error {
+	// Rollback is a noop because the transaction will be rolled back at the end
+	return nil
+}
+
 func (c *conn) Begin() (driver.Tx, error) {
 	c.Lock()
 	defer c.Unlock()
@@ -121,7 +135,7 @@ func (c *conn) Begin() (driver.Tx, error) {
 		panic("conn is closed")
 	}
 	// Begin is a noop because the transaction was already opened
-	return c.tx, nil
+	return tx{c.tx}, nil
 }
 
 // Implement the "ConnBeginTx" interface
