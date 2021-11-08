@@ -123,7 +123,7 @@ func TestResolver_OCRDeleteBundle(t *testing.T) {
 	assert.NoError(t, err)
 
 	mutation := `
-		mutation DeleteOCRKeyBundle($id: String!) {
+		mutation DeleteOCRKeyBundle($id: ID!) {
 			deleteOCRKeyBundle(id: $id) {
 				... on DeleteOCRKeyBundleSuccess {
 					bundle {
