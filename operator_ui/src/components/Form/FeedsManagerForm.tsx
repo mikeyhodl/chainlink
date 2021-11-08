@@ -164,7 +164,6 @@ export const FeedsManagerForm: React.FC<Props> = ({
 
             <Grid item xs={12}>
               <Button
-                data-testid="create-submit"
                 variant="contained"
                 color="primary"
                 disabled={isSubmitting}

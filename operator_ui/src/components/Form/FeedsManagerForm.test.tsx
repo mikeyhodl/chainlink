@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 
 import { FeedsManagerForm, FormValues } from './FeedsManagerForm'
 
-const { getByRole, getByTestId } = screen
+const { getByRole, getByTestId, getByText } = screen
 
 it('validates input', async () => {
   const handleSubmit = jest.fn()
@@ -27,7 +27,7 @@ it('validates input', async () => {
     }),
   )
 
-  userEvent.click(getByTestId('create-submit'))
+  userEvent.click(getByRole('button', { name: /submit/i }))
 
   await waitFor(() => {
     expect(getByTestId('name-helper-text')).toHaveTextContent('Required')
@@ -62,7 +62,7 @@ it('submits the form', async () => {
   userEvent.type(getByRole('textbox', { name: 'Public Key *' }), '11111')
   userEvent.click(getByRole('checkbox', { name: 'Flux Monitor' }))
 
-  userEvent.click(getByTestId('create-submit'))
+  userEvent.click(getByText(/submit/i))
 
   await waitFor(() =>
     expect(handleSubmit).toHaveBeenCalledWith(

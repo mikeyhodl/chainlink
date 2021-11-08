@@ -345,4 +345,19 @@ export type UpdateFeedsManagerSuccess = {
 
 export type FetchFeedsManagers = { readonly __typename?: 'Query', readonly feedsManagers: { readonly __typename?: 'FeedsManagersPayload', readonly results: ReadonlyArray<{ readonly __typename: 'FeedsManager', readonly id: string, readonly name: string, readonly uri: string, readonly publicKey: string, readonly jobTypes: ReadonlyArray<JobType>, readonly isBootstrapPeer: boolean, readonly isConnectionActive: boolean, readonly bootstrapPeerMultiaddr?: string | null | undefined, readonly createdAt: any }> } };
 
+export type UpdateFeedsManagerVariables = Exact<{
+  id: Scalars['ID'];
+  input: UpdateFeedsManagerInput;
+}>;
+
+
+export type UpdateFeedsManager = { readonly __typename?: 'Mutation', readonly updateFeedsManager: { readonly __typename?: 'InputErrors', readonly errors: ReadonlyArray<{ readonly __typename?: 'InputError', readonly path: string, readonly message: string, readonly code: ErrorCode }> } | { readonly __typename?: 'NotFoundError', readonly message: string, readonly code: ErrorCode } | { readonly __typename?: 'UpdateFeedsManagerSuccess', readonly feedsManager: { readonly __typename?: 'FeedsManager', readonly id: string, readonly name: string, readonly uri: string, readonly publicKey: string, readonly jobTypes: ReadonlyArray<JobType>, readonly isBootstrapPeer: boolean, readonly isConnectionActive: boolean, readonly bootstrapPeerMultiaddr?: string | null | undefined, readonly createdAt: any } } };
+
+export type CreateFeedsManagerVariables = Exact<{
+  input: CreateFeedsManagerInput;
+}>;
+
+
+export type CreateFeedsManager = { readonly __typename?: 'Mutation', readonly createFeedsManager: { readonly __typename?: 'CreateFeedsManagerSuccess', readonly feedsManager: { readonly __typename?: 'FeedsManager', readonly id: string, readonly name: string, readonly uri: string, readonly publicKey: string, readonly jobTypes: ReadonlyArray<JobType>, readonly isBootstrapPeer: boolean, readonly isConnectionActive: boolean, readonly bootstrapPeerMultiaddr?: string | null | undefined, readonly createdAt: any } } | { readonly __typename?: 'InputErrors', readonly errors: ReadonlyArray<{ readonly __typename?: 'InputError', readonly path: string, readonly message: string, readonly code: ErrorCode }> } | { readonly __typename?: 'NotFoundError', readonly message: string, readonly code: ErrorCode } | { readonly __typename?: 'SingleFeedsManagerError', readonly message: string, readonly code: ErrorCode } };
+
     }

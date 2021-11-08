@@ -25,7 +25,7 @@ export const FeedsManagerScreen: React.FC = () => {
       : undefined
 
   if (manager) {
-    return <FeedsManagerView data={manager} />
+    return <FeedsManagerView manager={manager} />
   }
 
   return (
