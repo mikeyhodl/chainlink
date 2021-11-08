@@ -30,7 +30,7 @@ func NewResultRunSaver(runResults <-chan pipeline.Run, pipelineRunner pipeline.R
 
 func (r *RunResultSaver) Start() error {
 	return r.StartOnce("RunResultSaver", func() error {
-		go shutdown.WrapRecover(r.logger, func() {
+		go func() {
 			for {
 				select {
 				case run := <-r.runResults:
@@ -44,7 +44,7 @@ func (r *RunResultSaver) Start() error {
 					return
 				}
 			}
-		})
+		}()
 		return nil
 	})
 }

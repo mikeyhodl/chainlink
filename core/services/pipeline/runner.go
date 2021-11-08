@@ -259,32 +259,19 @@ func (r *runner) run(
 ) (TaskRunResults, error) {
 	l.Debugw("Initiating tasks for pipeline run of spec", "job ID", run.PipelineSpec.JobID, "job name", run.PipelineSpec.JobName)
 
-	todo := context.TODO()
-	scheduler := newScheduler(todo, pipeline, run, vars)
+	schedulerCtx, cancel := context.WithTimeout(ctx, r.config.JobPipelineMaxRunDuration())
+	defer cancel()
+	scheduler := newScheduler(schedulerCtx, pipeline, run, vars)
 	go scheduler.Run()
 
 	for taskRun := range scheduler.taskCh {
 		// execute
 		go func(taskRun *memoryTaskRun) {
-			defer func() {
-				if err := recover(); err != nil {
-					l.Errorw("goroutine panicked executing run", "panic", err, "stacktrace", string(debug.Stack()))
-
-					t := time.Now()
-					scheduler.report(todo, TaskRunResult{
-						ID:         uuid.NewV4(),
-						Task:       taskRun.task,
-						Result:     Result{Error: ErrRunPanicked{err}},
-						FinishedAt: null.TimeFrom(t),
-						CreatedAt:  t, // TODO: more accurate start time
-					})
-				}
-			}()
 			result := r.executeTaskRun(ctx, run.PipelineSpec, taskRun, l)
 
 			logTaskRunToPrometheus(result, run.PipelineSpec)
 
-			scheduler.report(todo, result)
+			scheduler.report(schedulerCtx, result)
 		}(taskRun)
 	}
 
