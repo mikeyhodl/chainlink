@@ -1,19 +1,7 @@
 type VRFKey {
     id: ID!
-
-    """
-    The compressed VRF public key.
-    """
     compressed: String!
-
-    """
-    The uncompressed VRF public key.
-    """
     uncompressed: String!
-
-    """
-    The Keccak256 hash of the VRF public key.
-    """
     hash: String!
 }
 
