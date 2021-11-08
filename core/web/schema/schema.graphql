@@ -16,6 +16,7 @@ type Query {
     feedsManagers: FeedsManagersPayload!
     job(id: ID!): JobPayload!
     jobs(offset: Int, limit: Int): JobsPayload!
+    node(id: ID!): NodePayload!
     ocrKeyBundles: OCRKeyBundlesPayload!
     vrfKey(id: ID!): VRFKeyPayload!
     vrfKeys: VRFKeysPayload!
@@ -25,8 +26,11 @@ type Mutation {
     createBridge(input: CreateBridgeInput!): CreateBridgePayload!
     createCSAKey: CreateCSAKeyPayload!
     createFeedsManager(input: CreateFeedsManagerInput!): CreateFeedsManagerPayload!
+    createNode(input: CreateNodeInput!): CreateNodePayload!
     createOCRKeyBundle: CreateOCRKeyBundlePayload!
     createVRFKey: CreateVRFKeyPayload!
+    deleteBridge(name: String!): DeleteBridgePayload!
+    deleteNode(id: ID!): DeleteNodePayload!
     deleteOCRKeyBundle(id: ID!): DeleteOCRKeyBundlePayload!
     deleteVRFKey(id: ID!): DeleteVRFKeyPayload!
     updateBridge(name: String!, input: UpdateBridgeInput!): UpdateBridgePayload!
