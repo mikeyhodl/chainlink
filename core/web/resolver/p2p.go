@@ -6,19 +6,23 @@ import (
 	"github.com/smartcontractkit/chainlink/core/services/keystore/keys/p2pkey"
 )
 
-type P2PKey struct {
+type P2PKeyResolver struct {
 	key p2pkey.KeyV2
 }
 
-func (k P2PKey) ID() graphql.ID {
+func NewP2PKeyResolver(key p2pkey.KeyV2) P2PKeyResolver {
+	return P2PKeyResolver{key}
+}
+
+func (k P2PKeyResolver) ID() graphql.ID {
 	return graphql.ID(k.key.ID())
 }
 
-func (k P2PKey) PeerID() string {
+func (k P2PKeyResolver) PeerID() string {
 	return k.key.PeerID().String()
 }
 
-func (k P2PKey) PublicKey() string {
+func (k P2PKeyResolver) PublicKey() string {
 	return k.key.PublicKeyHex()
 }
 
@@ -30,10 +34,10 @@ func NewP2PKeysPayloadResolver(keys []p2pkey.KeyV2) *P2PKeysPayloadResolver {
 	return &P2PKeysPayloadResolver{keys}
 }
 
-func (r *P2PKeysPayloadResolver) Results() []P2PKey {
-	results := []P2PKey{}
+func (r *P2PKeysPayloadResolver) Results() []P2PKeyResolver {
+	results := []P2PKeyResolver{}
 	for _, k := range r.keys {
-		results = append(results, P2PKey{k})
+		results = append(results, NewP2PKeyResolver(k))
 	}
 	return results
 }
@@ -46,8 +50,8 @@ func NewCreateP2PKeyPayloadResolver(key p2pkey.KeyV2) *CreateP2PKeyPayloadResolv
 	return &CreateP2PKeyPayloadResolver{key}
 }
 
-func (r *CreateP2PKeyPayloadResolver) Key() P2PKey {
-	return P2PKey{r.key}
+func (r *CreateP2PKeyPayloadResolver) Key() P2PKeyResolver {
+	return NewP2PKeyResolver(r.key)
 }
 
 type DeleteP2PKeySuccessResolver struct {
@@ -58,8 +62,8 @@ func NewDeleteP2PKeySuccessResolver(key p2pkey.KeyV2) *DeleteP2PKeySuccessResolv
 	return &DeleteP2PKeySuccessResolver{key}
 }
 
-func (r *DeleteP2PKeySuccessResolver) Key() P2PKey {
-	return P2PKey{r.key}
+func (r *DeleteP2PKeySuccessResolver) Key() P2PKeyResolver {
+	return NewP2PKeyResolver(r.key)
 }
 
 type DeleteP2PKeyPayloadResolver struct {
