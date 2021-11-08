@@ -11,14 +11,25 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/pkg/errors"
 	"github.com/smartcontractkit/sqlx"
 )
 
 // txdb is a simplified version of https://github.com/DATA-DOG/go-txdb
-// The original lib has various problems and is harder to understand because it tries to be more general
-// This version is very tightly focused and should be easier to reason about and less likely to have subtle bugs/races
-
+//
+// The original lib has various problems and is hard to understand because it
+// tries to be more general. The version in thie file is more tightly focused
+// to our needs and should be easier to reason about and less likely to have
+// subtle bugs/races.
+//
+// It doesn't currently support savepoints but could be made to if necessary.
+//
+// Transaction BEGIN/ROLLBACK effectively becomes a no-op, this should have no
+// negative impact on normal test operation.
+//
+// If you MUST test BEGIN/ROLLBACK behaviour, you will have to configure your
+// store to use the raw DialectPostgres dialect and setup a one-use database.
+// See heavyweight.FullTestDB() as a convenience function to help you do this,
+// but please use sparingly because as it's name implies, it is expensive.
 func init() {
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
@@ -37,20 +48,12 @@ func init() {
 		msg := fmt.Sprintf("cannot run tests against database named `%s`. Note that the test database MUST end in `_test` to differentiate from a possible production DB. HINT: Try DATABASE_URL=postgresql://postgres@localhost:5432/chainlink_test?sslmode=disable", parsed.Path[1:])
 		panic(msg)
 	}
-	// NOTE: That this will cause transaction BEGIN/ROLLBACK to effectively be
-	// a no-op, this should have no negative impact on normal test operation.
-	// If you MUST test BEGIN/ROLLBACK behaviour, you will have to configure your
-	// store to use the raw DialectPostgres dialect and setup a one-use database.
-	// See BootstrapThrowawayORM() as a convenience function to help you do this.
-	// https://app.clubhouse.io/chainlinklabs/story/8781/remove-dependency-on-gorm
 	sql.Register("txdb", &txDriver{
 		dbURL: dbURL,
 		conns: make(map[string]*conn),
 	})
 	sqlx.BindDriver("txdb", sqlx.DOLLAR)
 }
-
-// Originally we used go-txdb but it has bugs
 
 var _ driver.Conn = &conn{}
 
@@ -65,13 +68,6 @@ type txDriver struct {
 	dbURL string
 }
 
-type conn struct {
-	sync.Mutex
-	tx     *sql.Tx
-	closed bool
-	remove func() error
-}
-
 func (d *txDriver) Open(dsn string) (driver.Conn, error) {
 	d.Lock()
 	defer d.Unlock()
@@ -83,28 +79,31 @@ func (d *txDriver) Open(dsn string) (driver.Conn, error) {
 		}
 		d.db = db
 	}
-	if _, exists := d.conns[dsn]; exists {
-		return nil, errors.Errorf("already opened database with dsn: %s", dsn)
+	c, exists := d.conns[dsn]
+	if !exists {
+		tx, err := d.db.Begin()
+		if err != nil {
+			return nil, err
+		}
+		c = &conn{tx: tx}
+		d.conns[dsn] = c
+		c.removeSelf = func() error {
+			return d.deleteConn(c)
+		}
+		d.conns[dsn] = c
 	}
-	tx, err := d.db.Begin()
-	if err != nil {
-		return nil, err
-	}
-	c := &conn{tx: tx}
-	d.conns[dsn] = c
-	c.remove = func() error {
-		return errors.Wrap(d.deleteConn(dsn), "failed to remove conn")
-	}
+	c.opened++
 	return c, nil
 }
 
 // deleteConn is called by connection when it is closed
 // It also auto-closes the DB when the last checked out connection is closed
-func (d *txDriver) deleteConn(dsn string) error {
+func (d *txDriver) deleteConn(c *conn) error {
+	// must lock here to avoid racing with Open
 	d.Lock()
 	defer d.Unlock()
 
-	delete(d.conns, dsn)
+	delete(d.conns, c.dsn)
 	if len(d.conns) == 0 && d.db != nil {
 		if err := d.db.Close(); err != nil {
 			return err
@@ -114,18 +113,13 @@ func (d *txDriver) deleteConn(dsn string) error {
 	return nil
 }
 
-type tx struct {
-	tx *sql.Tx
-}
-
-func (tx tx) Commit() error {
-	// Commit is a noop because the transaction will be rolled back at the end
-	return nil
-}
-
-func (tx tx) Rollback() error {
-	// Rollback is a noop because the transaction will be rolled back at the end
-	return nil
+type conn struct {
+	sync.Mutex
+	dsn        string
+	tx         *sql.Tx
+	closed     bool
+	opened     int
+	removeSelf func() error
 }
 
 func (c *conn) Begin() (driver.Tx, error) {
@@ -145,16 +139,7 @@ func (c *conn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, e
 
 // Prepare returns a prepared statement, bound to this connection.
 func (c *conn) Prepare(query string) (driver.Stmt, error) {
-	c.Lock()
-	defer c.Unlock()
-	if c.closed {
-		panic("conn is closed")
-	}
-	st, err := c.tx.Prepare(query)
-	if err != nil {
-		return nil, err
-	}
-	return stmt{st, c}, nil
+	return c.PrepareContext(context.Background(), query)
 }
 
 // Implement the "ConnPrepareContext" interface
@@ -172,6 +157,32 @@ func (c *conn) PrepareContext(ctx context.Context, query string) (driver.Stmt, e
 	return &stmt{st, c}, nil
 }
 
+// pgx returns nil
+func (c *conn) CheckNamedValue(nv *driver.NamedValue) error {
+	return nil
+}
+
+// Implement the "QueryerContext" interface
+func (c *conn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	c.Lock()
+	defer c.Unlock()
+
+	rs, err := c.tx.QueryContext(ctx, query, mapNamedArgs(args)...)
+	if err != nil {
+		return nil, err
+	}
+	defer rs.Close()
+
+	return buildRows(rs)
+}
+
+// Implement the "ExecerContext" interface
+func (c *conn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+	c.Lock()
+	defer c.Unlock()
+	return c.tx.ExecContext(ctx, query, mapNamedArgs(args)...)
+}
+
 // Close invalidates and potentially stops any current
 // prepared statements and transactions, marking this
 // connection as no longer in use.
@@ -187,26 +198,33 @@ func (c *conn) Close() (err error) {
 	c.Lock()
 	defer c.Unlock()
 
-	if c.closed {
-		panic("conn already closed")
+	c.opened--
+	if c.opened == 0 {
+		c.closed = true
+		if c.tx != nil {
+			if err := c.tx.Rollback(); err != nil {
+				panic(err)
+			}
+			c.tx = nil
+		}
+		if err := c.removeSelf(); err != nil {
+			panic(err)
+		}
 	}
-	c.closed = false
+	return
+}
 
-	// Rollback on Close
-	if err = c.tx.Rollback(); err != nil {
-		err = errors.Wrap(err, "failed to rollback transaction on close")
-	}
+type tx struct {
+	tx *sql.Tx
+}
 
-	// remove dsn from the parent driver map
-	if err = c.remove(); err != nil {
-		return errors.Wrap(err, "failed to remove conn")
-	}
-
+func (tx tx) Commit() error {
+	// Commit is a noop because the transaction will be rolled back at the end
 	return nil
 }
 
-// pgx returns nil
-func (c *conn) CheckNamedValue(nv *driver.NamedValue) error {
+func (tx tx) Rollback() error {
+	// Rollback is a noop because the transaction will be rolled back at the end
 	return nil
 }
 

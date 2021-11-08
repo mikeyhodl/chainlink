@@ -164,9 +164,13 @@ func sqlxTransactionQ(ctx context.Context, db *sqlx.DB, lggr logger.Logger, fn f
 		}
 	}()
 
-	_, err = tx.Exec(fmt.Sprintf(`SET LOCAL lock_timeout = %v; SET LOCAL idle_in_transaction_session_timeout = %v;`, lockTimeout.Milliseconds(), idleInTxSessionTimeout.Milliseconds()))
+	_, err = tx.Exec(fmt.Sprintf(`SET LOCAL lock_timeout = %d`, lockTimeout.Milliseconds()))
 	if err != nil {
-		return errors.Wrap(err, "error setting transaction timeouts")
+		return errors.Wrap(err, "error setting lock timeout")
+	}
+	_, err = tx.Exec(fmt.Sprintf(`SET LOCAL idle_in_transaction_session_timeout = %d`, idleInTxSessionTimeout.Milliseconds()))
+	if err != nil {
+		return errors.Wrap(err, "error setting idle in transaction session timeout")
 	}
 
 	err = fn(tx)
