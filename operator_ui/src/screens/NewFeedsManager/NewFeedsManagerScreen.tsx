@@ -1,20 +1,20 @@
 import React from 'react'
-import { FormikHelpers } from 'formik'
+
 import { useMutation, gql } from '@apollo/client'
+import { FormikHelpers } from 'formik'
+import { useDispatch } from 'react-redux'
 import { Redirect, useHistory, useLocation } from 'react-router-dom'
 
+import { notifySuccessMsg, notifyErrorMsg } from 'actionCreators'
+import { ErrorHandler } from 'src/components/ErrorHandler/ErrorHandler'
 import { FormValues } from 'components/Form/FeedsManagerForm'
+import { parseInputErrors } from 'src/utils/inputErrors'
 import { Loading } from 'src/components/Feedback/Loading'
 import { NewFeedsManagerView } from './NewFeedsManagerView'
 import {
   FEEDS_MANAGERS_QUERY,
   useFeedsManagersQuery,
 } from 'src/hooks/useFeedsManagersQuery'
-
-// NOTE: To be refactored to not use redux
-import { useDispatch } from 'react-redux'
-import { notifySuccessMsg, notifyErrorMsg } from 'actionCreators'
-import { ErrorHandler } from 'src/components/ErrorHandler/ErrorHandler'
 
 export const CREATE_FEEDS_MANAGER_MUTATION = gql`
   mutation CreateFeedsManager($input: CreateFeedsManagerInput!) {
@@ -103,16 +103,7 @@ export const NewFeedsManagerScreen: React.FC = () => {
         case 'InputErrors':
           dispatch(notifyErrorMsg('Invalid Input'))
 
-          const errs = payload.errors.reduce((obj, item) => {
-            const key = item['path'].replace(/^input\//, '')
-
-            return {
-              ...obj,
-              [key]: item.message,
-            }
-          }, {})
-
-          setErrors(errs)
+          setErrors(parseInputErrors(payload))
 
           break
       }

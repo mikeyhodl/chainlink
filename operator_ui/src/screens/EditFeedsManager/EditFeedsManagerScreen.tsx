@@ -9,6 +9,7 @@ import { notifySuccessMsg, notifyErrorMsg } from 'actionCreators'
 import { EditFeedsManagerView } from './EditFeedsManagerView'
 import { ErrorHandler } from 'src/components/ErrorHandler/ErrorHandler'
 import { FormValues } from 'components/Form/FeedsManagerForm'
+import { parseInputErrors } from 'src/utils/inputErrors'
 import { Loading } from 'components/Feedback/Loading'
 import {
   useFeedsManagersQuery,
@@ -108,16 +109,7 @@ export const EditFeedsManagerScreen: React.FC = () => {
         case 'InputErrors':
           dispatch(notifyErrorMsg('Invalid Input'))
 
-          const errs = payload.errors.reduce((obj, item) => {
-            const key = item['path'].replace(/^input\//, '')
-
-            return {
-              ...obj,
-              [key]: item.message,
-            }
-          }, {})
-
-          setErrors(errs)
+          setErrors(parseInputErrors(payload))
 
           break
       }
