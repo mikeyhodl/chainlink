@@ -210,6 +210,27 @@ func (r *Resolver) Features(ctx context.Context) (*FeaturesPayloadResolver, erro
 	return NewFeaturesPayloadResolver(r.App.GetConfig()), nil
 }
 
+func (r *Resolver) Node(ctx context.Context, args struct{ ID graphql.ID }) (*NodePayloadResolver, error) {
+	if err := authenticateUser(ctx); err != nil {
+		return nil, err
+	}
+
+	id, err := strconv.ParseInt(string(args.ID), 10, 32)
+	if err != nil {
+		return nil, err
+	}
+
+	node, err := r.App.EVMORM().Node(int32(id))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return NewNodePayloadResolver(nil, err), nil
+		}
+		return nil, err
+	}
+
+	return NewNodePayloadResolver(&node, nil), nil
+}
+
 func (r *Resolver) P2PKeys(ctx context.Context) (*P2PKeysPayloadResolver, error) {
 	if err := authenticateUser(ctx); err != nil {
 		return nil, err
