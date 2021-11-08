@@ -17,6 +17,8 @@ type Query {
     job(id: ID!): JobPayload!
     jobs(offset: Int, limit: Int): JobsPayload!
     ocrKeyBundles: OCRKeyBundlesPayload!
+    vrfKey(id: ID!): VRFKeyPayload!
+    vrfKeys: VRFKeysPayload!
 }
 
 type Mutation {
@@ -24,7 +26,9 @@ type Mutation {
     createCSAKey: CreateCSAKeyPayload!
     createFeedsManager(input: CreateFeedsManagerInput!): CreateFeedsManagerPayload!
     createOCRKeyBundle: CreateOCRKeyBundlePayload!
+    createVRFKey: CreateVRFKeyPayload!
     deleteOCRKeyBundle(id: ID!): DeleteOCRKeyBundlePayload!
+    deleteVRFKey(id: ID!): DeleteVRFKeyPayload!
     updateBridge(name: String!, input: UpdateBridgeInput!): UpdateBridgePayload!
     updateFeedsManager(id: ID!, input: UpdateFeedsManagerInput!): UpdateFeedsManagerPayload!
 }

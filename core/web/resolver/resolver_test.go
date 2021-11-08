@@ -32,6 +32,7 @@ type mocks struct {
 	ocr       *keystoreMocks.OCR
 	csa       *keystoreMocks.CSA
 	keystore  *keystoreMocks.Master
+	vrf       *keystoreMocks.VRF
 }
 
 // gqlTestFramework is a framework wrapper containing the objects needed to run
@@ -75,6 +76,7 @@ func setupFramework(t *testing.T) *gqlTestFramework {
 		ocr:       &keystoreMocks.OCR{},
 		csa:       &keystoreMocks.CSA{},
 		keystore:  &keystoreMocks.Master{},
+		vrf:       &keystoreMocks.VRF{},
 	}
 
 	// Assert expectations for any mocks that we set up
@@ -89,6 +91,7 @@ func setupFramework(t *testing.T) *gqlTestFramework {
 			m.ocr,
 			m.csa,
 			m.keystore,
+			m.vrf,
 		)
 	})
 

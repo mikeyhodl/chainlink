@@ -1,0 +1,38 @@
+type VRFKey {
+    id: ID!
+
+    """
+    The compressed VRF public key.
+    """
+    compressed: String!
+
+    """
+    The uncompressed VRF public key.
+    """
+    uncompressed: String!
+
+    """
+    The Keccak256 hash of the VRF public key.
+    """
+    hash: String!
+}
+
+type VRFKeySuccess {
+    key: VRFKey!
+}
+
+union VRFKeyPayload = VRFKeySuccess | NotFoundError
+
+type VRFKeysPayload {
+    results: [VRFKey!]!
+}
+
+type CreateVRFKeyPayload {
+    key: VRFKey!
+}
+
+type DeleteVRFKeySuccess {
+    key: VRFKey!
+}
+
+union DeleteVRFKeyPayload = DeleteVRFKeySuccess | NotFoundError
