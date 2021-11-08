@@ -1,5 +1,6 @@
 import * as React from 'react'
 
+import { GraphQLError } from 'graphql'
 import { Route } from 'react-router-dom'
 import {
   renderWithRouter,
@@ -207,4 +208,21 @@ it('handles input errors', async () => {
   expect(await findByTestId('publicKey-helper-text')).toHaveTextContent(
     'invalid hex value',
   )
+})
+
+test('renders GQL errors', async () => {
+  const mocks: MockedResponse[] = [
+    {
+      request: {
+        query: FEEDS_MANAGERS_QUERY,
+      },
+      result: {
+        errors: [new GraphQLError('Error!')],
+      },
+    },
+  ]
+
+  renderComponent(mocks)
+
+  expect(await findByText('Error: Error!')).toBeInTheDocument()
 })

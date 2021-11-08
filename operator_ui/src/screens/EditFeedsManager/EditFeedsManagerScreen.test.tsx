@@ -16,6 +16,7 @@ import {
 } from './EditFeedsManagerScreen'
 import { FEEDS_MANAGERS_QUERY } from 'src/hooks/useFeedsManagersQuery'
 import Notifications from 'pages/Notifications'
+import { GraphQLError } from 'graphql'
 
 const { findByText, findByTestId, getByRole, queryByRole } = screen
 
@@ -286,4 +287,21 @@ it('handles a input errors', async () => {
   expect(await findByTestId('publicKey-helper-text')).toHaveTextContent(
     'invalid hex value',
   )
+})
+
+test('renders GQL errors', async () => {
+  const mocks: MockedResponse[] = [
+    {
+      request: {
+        query: FEEDS_MANAGERS_QUERY,
+      },
+      result: {
+        errors: [new GraphQLError('Error!')],
+      },
+    },
+  ]
+
+  renderComponent(mocks)
+
+  expect(await findByText('Error: Error!')).toBeInTheDocument()
 })

@@ -1,6 +1,7 @@
 import React from 'react'
 import { Redirect, useLocation } from 'react-router-dom'
 
+import { ErrorHandler } from 'src/components/ErrorHandler/ErrorHandler'
 import { FeedsManagerView } from './FeedsManagerView'
 import { useFeedsManagersQuery } from 'src/hooks/useFeedsManagersQuery'
 import { Loading } from 'src/components/Feedback/Loading'
@@ -14,7 +15,7 @@ export const FeedsManagerScreen: React.FC = () => {
   }
 
   if (error) {
-    return <div>error</div> // TODO - Support error handling component
+    return <ErrorHandler error={error} />
   }
 
   // We currently only support a single feeds manager, but plan to support more

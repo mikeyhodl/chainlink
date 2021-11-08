@@ -14,6 +14,7 @@ import {
 // NOTE: To be refactored to not use redux
 import { useDispatch } from 'react-redux'
 import { notifySuccessMsg, notifyErrorMsg } from 'actionCreators'
+import { ErrorHandler } from 'src/components/ErrorHandler/ErrorHandler'
 
 export const CREATE_FEEDS_MANAGER_MUTATION = gql`
   mutation CreateFeedsManager($input: CreateFeedsManagerInput!) {
@@ -67,7 +68,7 @@ export const NewFeedsManagerScreen: React.FC = () => {
   }
 
   if (error) {
-    return <div>error</div>
+    return <ErrorHandler error={error} />
   }
 
   // We currently only support a single feeds manager, but plan to support more

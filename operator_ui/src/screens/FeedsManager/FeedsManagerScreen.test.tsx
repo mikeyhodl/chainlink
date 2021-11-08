@@ -1,5 +1,7 @@
 import * as React from 'react'
 
+import globPath from 'test-helpers/globPath'
+import { GraphQLError } from 'graphql'
 import { Route } from 'react-router-dom'
 import { renderWithRouter, screen } from 'support/test-utils'
 import { MockedProvider, MockedResponse } from '@apollo/client/testing'
@@ -8,9 +10,21 @@ import { buildFeedsManager } from 'support/factories/feedsManager'
 import { FeedsManagerScreen } from './FeedsManagerScreen'
 import { FEEDS_MANAGERS_QUERY } from 'src/hooks/useFeedsManagersQuery'
 
-import globPath from 'test-helpers/globPath'
-
 const { findByText } = screen
+
+function renderComponent(mocks: MockedResponse[]) {
+  renderWithRouter(
+    <>
+      <Route exact path="/">
+        <MockedProvider mocks={mocks} addTypename={false}>
+          <FeedsManagerScreen />
+        </MockedProvider>
+      </Route>
+
+      <Route path="/feeds_manager/new">Redirect Success</Route>
+    </>,
+  )
+}
 
 test('renders the page', async () => {
   const mocks: MockedResponse[] = [
@@ -31,13 +45,7 @@ test('renders the page', async () => {
   // Temporary until we switch it out for GQL
   global.fetch.getOnce(globPath('/v2/job_proposals'), { data: [] })
 
-  renderWithRouter(
-    <MockedProvider mocks={mocks} addTypename={false}>
-      <Route>
-        <FeedsManagerScreen />
-      </Route>
-    </MockedProvider>,
-  )
+  renderComponent(mocks)
 
   expect(await findByText('Feeds Manager')).toBeInTheDocument()
   expect(await findByText('Job Proposals')).toBeInTheDocument()
@@ -59,17 +67,24 @@ test('redirects when a manager does not exists', async () => {
     },
   ]
 
-  renderWithRouter(
-    <>
-      <Route exact path="/">
-        <MockedProvider mocks={mocks} addTypename={false}>
-          <FeedsManagerScreen />
-        </MockedProvider>
-      </Route>
-
-      <Route path="/feeds_manager/new">Redirect Success</Route>
-    </>,
-  )
+  renderComponent(mocks)
 
   expect(await findByText('Redirect Success')).toBeInTheDocument()
+})
+
+test('renders GQL errors', async () => {
+  const mocks: MockedResponse[] = [
+    {
+      request: {
+        query: FEEDS_MANAGERS_QUERY,
+      },
+      result: {
+        errors: [new GraphQLError('Error!')],
+      },
+    },
+  ]
+
+  renderComponent(mocks)
+
+  expect(await findByText('Error: Error!')).toBeInTheDocument()
 })
