@@ -192,7 +192,7 @@ func (ks *p2p) GetOrFirst(id p2pkey.PeerID) (p2pkey.KeyV2, error) {
 func (ks *p2p) getByID(id p2pkey.PeerID) (p2pkey.KeyV2, error) {
 	key, found := ks.keyRing.P2P[id.Raw()]
 	if !found {
-		return p2pkey.KeyV2{}, errors.Wrapf(ErrMissingP2PKey, "unable to find P2P key with id %s", id)
+		return p2pkey.KeyV2{}, KeyNotFoundError{ID: id.String(), KeyType: "P2P"}
 	}
 	return key, nil
 }

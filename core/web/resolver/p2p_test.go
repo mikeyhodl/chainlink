@@ -3,9 +3,9 @@ package resolver
 import (
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"testing"
 
-	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/smartcontractkit/chainlink/core/services/keystore"
@@ -30,8 +30,7 @@ func TestResolver_GetP2PKeys(t *testing.T) {
 	fakeKeys := []p2pkey.KeyV2{}
 	expectedKeys := []map[string]string{}
 	for i := 0; i < 2; i++ {
-		k, err := p2pkey.NewV2()
-		assert.NoError(t, err)
+		k := p2pkey.MustNewV2XXXTestingOnly(big.NewInt(1))
 		fakeKeys = append(fakeKeys, k)
 		expectedKeys = append(expectedKeys, map[string]string{
 			"id":        k.ID(),
@@ -81,8 +80,7 @@ func TestResolver_CreateP2PKey(t *testing.T) {
 		}
 	`
 
-	fakeKey, err := p2pkey.NewV2()
-	assert.NoError(t, err)
+	fakeKey := p2pkey.MustNewV2XXXTestingOnly(big.NewInt(1))
 
 	d, err := json.Marshal(map[string]interface{}{
 		"createP2PKey": map[string]interface{}{
@@ -117,8 +115,7 @@ func TestResolver_CreateP2PKey(t *testing.T) {
 func TestResolver_DeleteP2PKey(t *testing.T) {
 	t.Parallel()
 
-	fakeKey, err := p2pkey.NewV2()
-	assert.NoError(t, err)
+	fakeKey := p2pkey.MustNewV2XXXTestingOnly(big.NewInt(1))
 
 	query := `
 		mutation DeleteP2PKey($id: ID!) {
@@ -180,11 +177,7 @@ func TestResolver_DeleteP2PKey(t *testing.T) {
 					On("Delete", peerID).
 					Return(
 						p2pkey.KeyV2{},
-						errors.Wrapf(
-							keystore.ErrMissingP2PKey,
-							"unable to find P2P key with id %s",
-							fakeKey.ID(),
-						),
+						keystore.KeyNotFoundError{ID: peerID.String(), KeyType: "P2P"},
 					)
 				f.Mocks.keystore.On("P2P").Return(f.Mocks.p2p)
 				f.App.On("GetKeyStore").Return(f.Mocks.keystore)
@@ -194,9 +187,9 @@ func TestResolver_DeleteP2PKey(t *testing.T) {
 			result: fmt.Sprintf(`{
 				"deleteP2PKey": {
 					"code":"NOT_FOUND",
-					"message":"unable to find P2P key with id %s: unable to find P2P key"
+					"message":"unable to find P2P key with id %s"
 				}
-			}`, fakeKey.ID()),
+			}`, peerID.String()),
 		},
 	}
 

@@ -2,6 +2,7 @@ package resolver
 
 import (
 	"encoding/json"
+	"math/big"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -29,8 +30,7 @@ func TestResolver_GetOCRKeyBundles(t *testing.T) {
 	fakeKeys := []ocrkey.KeyV2{}
 	expectedBundles := []map[string]string{}
 	for i := 0; i < 2; i++ {
-		k, err := ocrkey.NewV2()
-		assert.NoError(t, err)
+		k := ocrkey.MustNewV2XXXTestingOnly(big.NewInt(1))
 		fakeKeys = append(fakeKeys, k)
 		expectedBundles = append(expectedBundles, map[string]string{
 			"id":                    k.ID(),
@@ -82,8 +82,7 @@ func TestResolver_OCRCreateBundle(t *testing.T) {
 		}
 	`
 
-	fakeKey, err := ocrkey.NewV2()
-	assert.NoError(t, err)
+	fakeKey := ocrkey.MustNewV2XXXTestingOnly(big.NewInt(1))
 
 	d, err := json.Marshal(map[string]interface{}{
 		"createOCRKeyBundle": map[string]interface{}{
@@ -119,8 +118,7 @@ func TestResolver_OCRCreateBundle(t *testing.T) {
 func TestResolver_OCRDeleteBundle(t *testing.T) {
 	t.Parallel()
 
-	fakeKey, err := ocrkey.NewV2()
-	assert.NoError(t, err)
+	fakeKey := ocrkey.MustNewV2XXXTestingOnly(big.NewInt(1))
 
 	mutation := `
 		mutation DeleteOCRKeyBundle($id: ID!) {
@@ -175,7 +173,9 @@ func TestResolver_OCRDeleteBundle(t *testing.T) {
 			name:          "not found error",
 			authenticated: true,
 			before: func(f *gqlTestFramework) {
-				f.Mocks.ocr.On("Delete", fakeKey.ID()).Return(ocrkey.KeyV2{}, keystore.KeyNotFoundError{ID: "helloWorld"})
+				f.Mocks.ocr.
+					On("Delete", fakeKey.ID()).
+					Return(ocrkey.KeyV2{}, keystore.KeyNotFoundError{ID: "helloWorld", KeyType: "OCR"})
 				f.Mocks.keystore.On("OCR").Return(f.Mocks.ocr)
 				f.App.On("GetKeyStore").Return(f.Mocks.keystore)
 			},

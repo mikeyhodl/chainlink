@@ -422,7 +422,7 @@ func (r *Resolver) DeleteP2PKey(ctx context.Context, args struct {
 
 	key, err := r.App.GetKeyStore().P2P().Delete(keyID)
 	if err != nil {
-		if errors.Cause(err) == keystore.ErrMissingP2PKey {
+		if errors.As(err, &keystore.KeyNotFoundError{}) {
 			return NewDeleteP2PKeyPayloadResolver(p2pkey.KeyV2{}, err), nil
 		}
 		return nil, err
