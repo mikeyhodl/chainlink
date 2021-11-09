@@ -213,6 +213,29 @@ func (_m *ORM) GetManager(ctx context.Context, id int64) (*feeds.FeedsManager, e
 	return r0, r1
 }
 
+// GetManagers provides a mock function with given fields: ctx, ids
+func (_m *ORM) GetManagers(ctx context.Context, ids []int64) ([]feeds.FeedsManager, error) {
+	ret := _m.Called(ctx, ids)
+
+	var r0 []feeds.FeedsManager
+	if rf, ok := ret.Get(0).(func(context.Context, []int64) []feeds.FeedsManager); ok {
+		r0 = rf(ctx, ids)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]feeds.FeedsManager)
+		}
+	}
+
+	var r1 error
+	if rf, ok := ret.Get(1).(func(context.Context, []int64) error); ok {
+		r1 = rf(ctx, ids)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
 // IsJobManaged provides a mock function with given fields: ctx, jobID
 func (_m *ORM) IsJobManaged(ctx context.Context, jobID int64) (bool, error) {
 	ret := _m.Called(ctx, jobID)

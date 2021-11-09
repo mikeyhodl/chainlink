@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"time"
 
+	"github.com/lib/pq"
 	uuid "github.com/satori/go.uuid"
 	"gorm.io/gorm"
 
@@ -25,6 +26,7 @@ type ORM interface {
 	GetJobProposal(ctx context.Context, id int64) (*JobProposal, error)
 	GetJobProposalByRemoteUUID(ctx context.Context, uuid uuid.UUID) (*JobProposal, error)
 	GetManager(ctx context.Context, id int64) (*FeedsManager, error)
+	GetManagers(ctx context.Context, ids []int64) ([]FeedsManager, error)
 	IsJobManaged(ctx context.Context, jobID int64) (bool, error)
 	ListJobProposals(ctx context.Context) ([]JobProposal, error)
 	ListManagers(ctx context.Context) ([]FeedsManager, error)
@@ -111,6 +113,27 @@ WHERE id = ?;
 	}
 
 	return &mgr, nil
+}
+
+// GetManagers gets feeds managers by ids
+func (o *orm) GetManagers(ctx context.Context, ids []int64) (managers []FeedsManager, err error) {
+	stmt := `
+SELECT id, name, uri, public_key, job_types, is_ocr_bootstrap_peer, ocr_bootstrap_peer_multiaddr, created_at, updated_at
+FROM feeds_managers
+WHERE id = ANY(?)
+ORDER BY created_at, id;`
+
+	mgrIds := pq.Array(ids)
+
+	result := o.db.WithContext(ctx).Raw(stmt, mgrIds).Scan(&managers)
+	if result.RowsAffected == 0 {
+		return nil, sql.ErrNoRows
+	}
+	if result.Error != nil {
+		return nil, result.Error
+	}
+
+	return managers, nil
 }
 
 func (o *orm) UpdateManager(ctx context.Context, mgr FeedsManager) error {
