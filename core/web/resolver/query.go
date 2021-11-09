@@ -210,6 +210,7 @@ func (r *Resolver) Features(ctx context.Context) (*FeaturesPayloadResolver, erro
 	return NewFeaturesPayloadResolver(r.App.GetConfig()), nil
 }
 
+// Node retrieves a node by ID
 func (r *Resolver) Node(ctx context.Context, args struct{ ID graphql.ID }) (*NodePayloadResolver, error) {
 	if err := authenticateUser(ctx); err != nil {
 		return nil, err
@@ -229,4 +230,29 @@ func (r *Resolver) Node(ctx context.Context, args struct{ ID graphql.ID }) (*Nod
 	}
 
 	return NewNodePayloadResolver(&node, nil), nil
+}
+
+// JobProposal retrieves a job proposal by ID
+func (r *Resolver) JobProposal(ctx context.Context, args struct {
+	ID graphql.ID
+}) (*JobProposalPayloadResolver, error) {
+	if err := authenticateUser(ctx); err != nil {
+		return nil, err
+	}
+
+	id, err := strconv.ParseInt(string(args.ID), 10, 64)
+	if err != nil {
+		return nil, err
+	}
+
+	jp, err := r.App.GetFeedsService().GetJobProposal(id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return NewJobProposalPayload(nil, err), nil
+		}
+
+		return nil, err
+	}
+
+	return NewJobProposalPayload(jp, err), nil
 }
