@@ -24,6 +24,9 @@ contracts/src/v0.5
 contracts/src/v0.6
 contracts/**/vendor
 
+# Ignore generated GQL files
+operator_ui/graphql.schema.json
+
 # Ignore TS definition and map files
 **/**.d.ts
 **/**.d.ts.map
