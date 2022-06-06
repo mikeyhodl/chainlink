@@ -5,12 +5,13 @@ import (
 
 	"github.com/pkg/errors"
 
-	"github.com/smartcontractkit/chainlink/core/config/envvar"
-	"github.com/smartcontractkit/chainlink/core/config/parse"
-	"github.com/smartcontractkit/chainlink/core/services/keystore/keys/p2pkey"
 	ocrnetworking "github.com/smartcontractkit/libocr/networking"
+
+	"github.com/smartcontractkit/chainlink/core/config/envvar"
+	"github.com/smartcontractkit/chainlink/core/services/keystore/keys/p2pkey"
 )
 
+// P2PNetworking is a subset of global config relevant to p2p networking.
 type P2PNetworking interface {
 	P2PNetworkingStack() (n ocrnetworking.NetworkingStack)
 	P2PNetworkingStackRaw() string
@@ -26,7 +27,7 @@ func (c *generalConfig) P2PNetworkingStack() (n ocrnetworking.NetworkingStack) {
 	str := c.P2PNetworkingStackRaw()
 	err := n.UnmarshalText([]byte(str))
 	if err != nil {
-		c.lggr.Fatalf("P2PNetworkingStack failed to unmarshal '%s': %s", str, err)
+		c.lggr.Panicf("P2PNetworkingStack failed to unmarshal '%s': %s", str, err)
 	}
 	return n
 }
@@ -44,7 +45,7 @@ func (c *generalConfig) P2PPeerID() p2pkey.PeerID {
 	}
 	var pid p2pkey.PeerID
 	if err := pid.UnmarshalText([]byte(pidStr)); err != nil {
-		c.lggr.Error(errors.Wrapf(ErrInvalid, "P2P_PEER_ID is invalid %v", err))
+		c.lggr.Critical(errors.Wrapf(ErrInvalid, "P2P_PEER_ID is invalid %v", err))
 		return ""
 	}
 	return pid
@@ -59,18 +60,18 @@ func (c *generalConfig) P2PIncomingMessageBufferSize() int {
 	if c.OCRIncomingMessageBufferSize() != 0 {
 		return c.OCRIncomingMessageBufferSize()
 	}
-	return int(c.getWithFallback("P2PIncomingMessageBufferSize", parse.Uint16).(uint16))
+	return int(getEnvWithFallback(c, envvar.NewUint16("P2PIncomingMessageBufferSize")))
 }
 
 func (c *generalConfig) P2POutgoingMessageBufferSize() int {
 	if c.OCROutgoingMessageBufferSize() != 0 {
-		return c.OCRIncomingMessageBufferSize()
+		return c.OCROutgoingMessageBufferSize()
 	}
-	return int(c.getWithFallback("P2PIncomingMessageBufferSize", parse.Uint16).(uint16))
+	return int(getEnvWithFallback(c, envvar.NewUint16("P2POutgoingMessageBufferSize")))
 }
 
 type P2PDeprecated interface {
-	// DEPRECATED - HERE FOR BACKWARDS COMPATABILITY
+	// DEPRECATED - HERE FOR BACKWARDS COMPATIBILITY
 	OCRNewStreamTimeout() time.Duration
 	OCRBootstrapCheckInterval() time.Duration
 	OCRDHTLookupInterval() int
@@ -101,5 +102,5 @@ func (c *generalConfig) OCRIncomingMessageBufferSize() int {
 
 // DEPRECATED
 func (c *generalConfig) OCROutgoingMessageBufferSize() int {
-	return c.viper.GetInt("OCRIncomingMessageBufferSize")
+	return c.viper.GetInt("OCROutgoingMessageBufferSize")
 }

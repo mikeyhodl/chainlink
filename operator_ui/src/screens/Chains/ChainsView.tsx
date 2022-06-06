@@ -1,6 +1,5 @@
 import React, { useMemo } from 'react'
 
-import { gql } from '@apollo/client'
 import { useHistory } from 'react-router-dom'
 
 import Grid from '@material-ui/core/Grid'
@@ -13,19 +12,12 @@ import TablePagination from '@material-ui/core/TablePagination'
 import TableRow from '@material-ui/core/TableRow'
 
 import BaseLink from 'src/components/BaseLink'
+import { BetaAlert } from './BetaAlert'
 import Button from 'src/components/Button'
 import { ChainRow } from './ChainRow'
 import Content from 'src/components/Content'
 import { Heading1 } from 'src/components/Heading/Heading1'
 import { SearchTextField } from 'src/components/Search/SearchTextField'
-
-export const CHAINS_PAYLOAD__RESULTS_FIELDS = gql`
-  fragment ChainsPayload_ResultsFields on Chain {
-    id
-    enabled
-    createdAt
-  }
-`
 
 const searchIncludes = (searchParam: string) => {
   const lowerCaseSearchParam = searchParam.toLowerCase()
@@ -77,6 +69,10 @@ export const ChainsView: React.FC<Props> = ({
   return (
     <Content>
       <Grid container>
+        <Grid item xs={12}>
+          <BetaAlert />
+        </Grid>
+
         <Grid item xs={9}>
           <Heading1>Chains</Heading1>
         </Grid>

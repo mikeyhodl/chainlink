@@ -37,15 +37,16 @@ type EnvPrinter struct {
 	BlockHistoryEstimatorTransactionPercentile uint16          `json:"GAS_UPDATER_TRANSACTION_PERCENTILE"`
 	BridgeResponseURL                          string          `json:"BRIDGE_RESPONSE_URL,omitempty"`
 	ChainType                                  string          `json:"CHAIN_TYPE"`
-	ClientNodeURL                              string          `json:"CLIENT_NODE_URL"`
 	DatabaseBackupFrequency                    time.Duration   `json:"DATABASE_BACKUP_FREQUENCY"`
 	DatabaseBackupMode                         string          `json:"DATABASE_BACKUP_MODE"`
+	DatabaseBackupOnVersionUpgrade             bool            `json:"DATABASE_BACKUP_ON_VERSION_UPGRADE"`
 	DatabaseLockingMode                        string          `json:"DATABASE_LOCKING_MODE"`
 	DefaultChainID                             string          `json:"ETH_CHAIN_ID"`
 	DefaultHTTPLimit                           int64           `json:"DEFAULT_HTTP_LIMIT"`
 	DefaultHTTPTimeout                         models.Duration `json:"DEFAULT_HTTP_TIMEOUT"`
 	Dev                                        bool            `json:"CHAINLINK_DEV"`
-	EthereumDisabled                           bool            `json:"ETH_DISABLED"`
+	ShutdownGracePeriod                        time.Duration   `json:"SHUTDOWN_GRACE_PERIOD"`
+	EVMRPCEnabled                              bool            `json:"EVM_RPC_ENABLED"`
 	EthereumHTTPURL                            string          `json:"ETH_HTTP_URL"`
 	EthereumSecondaryURLs                      []string        `json:"ETH_SECONDARY_URLS"`
 	EthereumURL                                string          `json:"ETH_URL"`
@@ -61,11 +62,15 @@ type EnvPrinter struct {
 	KeeperDefaultTransactionQueueDepth         uint32          `json:"KEEPER_DEFAULT_TRANSACTION_QUEUE_DEPTH"`
 	KeeperGasPriceBufferPercent                uint32          `json:"KEEPER_GAS_PRICE_BUFFER_PERCENT"`
 	KeeperGasTipCapBufferPercent               uint32          `json:"KEEPER_GAS_TIP_CAP_BUFFER_PERCENT"`
+	KeeperBaseFeeBufferPercent                 uint32          `json:"KEEPER_BASE_FEE_BUFFER_PERCENT"`
 	KeeperMaximumGracePeriod                   int64           `json:"KEEPER_MAXIMUM_GRACE_PERIOD"`
 	KeeperRegistryCheckGasOverhead             uint64          `json:"KEEPER_REGISTRY_CHECK_GAS_OVERHEAD"`
 	KeeperRegistryPerformGasOverhead           uint64          `json:"KEEPER_REGISTRY_PERFORM_GAS_OVERHEAD"`
 	KeeperRegistrySyncInterval                 time.Duration   `json:"KEEPER_REGISTRY_SYNC_INTERVAL"`
 	KeeperRegistrySyncUpkeepQueueSize          uint32          `json:"KEEPER_REGISTRY_SYNC_UPKEEP_QUEUE_SIZE"`
+	KeeperCheckUpkeepGasPriceFeatureEnabled    bool            `json:"KEEPER_CHECK_UPKEEP_GAS_PRICE_FEATURE_ENABLED"`
+	KeeperTurnLookBack                         int64           `json:"KEEPER_TURN_LOOK_BACK"`
+	KeeperTurnFlagEnabled                      bool            `json:"KEEPER_TURN_FLAG_ENABLED"`
 	LeaseLockDuration                          time.Duration   `json:"LEASE_LOCK_DURATION"`
 	LeaseLockRefreshInterval                   time.Duration   `json:"LEASE_LOCK_REFRESH_INTERVAL"`
 	FlagsContractAddress                       string          `json:"FLAGS_CONTRACT_ADDRESS"`
@@ -73,8 +78,9 @@ type EnvPrinter struct {
 	LogFileDir                                 string          `json:"LOG_FILE_DIR"`
 	LogLevel                                   zapcore.Level   `json:"LOG_LEVEL"`
 	LogSQL                                     bool            `json:"LOG_SQL"`
-	LogSQLMigrations                           bool            `json:"LOG_SQL_MIGRATIONS"`
-	LogToDisk                                  bool            `json:"LOG_TO_DISK"`
+	LogFileMaxSize                             utils.FileSize  `json:"LOG_FILE_MAX_SIZE"`
+	LogFileMaxAge                              int64           `json:"LOG_FILE_MAX_AGE"`
+	LogFileMaxBackups                          int64           `json:"LOG_FILE_MAX_BACKUPS"`
 	TriggerFallbackDBPollInterval              time.Duration   `json:"JOB_PIPELINE_DB_POLL_INTERVAL"`
 
 	// OCR1
@@ -106,7 +112,6 @@ type EnvPrinter struct {
 
 	Port                         uint16          `json:"CHAINLINK_PORT"`
 	ReaperExpiration             models.Duration `json:"REAPER_EXPIRATION"`
-	ReplayFromBlock              int64           `json:"REPLAY_FROM_BLOCK"`
 	RootDir                      string          `json:"ROOT"`
 	SecureCookies                bool            `json:"SECURE_COOKIES"`
 	SessionTimeout               models.Duration `json:"SESSION_TIMEOUT"`
@@ -133,45 +138,63 @@ func NewConfigPrinter(cfg GeneralConfig) ConfigPrinter {
 	if cfg.TelemetryIngressURL() != nil {
 		telemetryIngressURL = cfg.TelemetryIngressURL().String()
 	}
+	bridgeResponseURL := ""
+	if cfg.BridgeResponseURL() != nil {
+		bridgeResponseURL = cfg.BridgeResponseURL().String()
+	}
 	ocrTransmitTimeout, _ := cfg.GlobalOCRContractTransmitterTransmitTimeout()
 	ocrDatabaseTimeout, _ := cfg.GlobalOCRDatabaseTimeout()
 	return ConfigPrinter{
 		EnvPrinter: EnvPrinter{
-			AdvisoryLockCheckInterval:          cfg.AdvisoryLockCheckInterval(),
-			AdvisoryLockID:                     cfg.AdvisoryLockID(),
-			AllowOrigins:                       cfg.AllowOrigins(),
-			BlockBackfillDepth:                 cfg.BlockBackfillDepth(),
-			BridgeResponseURL:                  cfg.BridgeResponseURL().String(),
-			ClientNodeURL:                      cfg.ClientNodeURL(),
-			DatabaseBackupFrequency:            cfg.DatabaseBackupFrequency(),
-			DatabaseBackupMode:                 string(cfg.DatabaseBackupMode()),
-			DatabaseLockingMode:                cfg.DatabaseLockingMode(),
-			DefaultChainID:                     cfg.DefaultChainID().String(),
-			DefaultHTTPLimit:                   cfg.DefaultHTTPLimit(),
-			DefaultHTTPTimeout:                 cfg.DefaultHTTPTimeout(),
-			Dev:                                cfg.Dev(),
-			EthereumDisabled:                   cfg.EthereumDisabled(),
-			EthereumHTTPURL:                    ethereumHTTPURL,
-			EthereumSecondaryURLs:              mapToStringA(cfg.EthereumSecondaryURLs()),
-			EthereumURL:                        cfg.EthereumURL(),
-			ExplorerURL:                        explorerURL,
-			FMDefaultTransactionQueueDepth:     cfg.FMDefaultTransactionQueueDepth(),
-			FeatureExternalInitiators:          cfg.FeatureExternalInitiators(),
-			FeatureOffchainReporting:           cfg.FeatureOffchainReporting(),
-			InsecureFastScrypt:                 cfg.InsecureFastScrypt(),
-			JSONConsole:                        cfg.JSONConsole(),
-			JobPipelineReaperInterval:          cfg.JobPipelineReaperInterval(),
-			JobPipelineReaperThreshold:         cfg.JobPipelineReaperThreshold(),
-			KeeperDefaultTransactionQueueDepth: cfg.KeeperDefaultTransactionQueueDepth(),
-			KeeperGasPriceBufferPercent:        cfg.KeeperGasPriceBufferPercent(),
-			KeeperGasTipCapBufferPercent:       cfg.KeeperGasTipCapBufferPercent(),
-			LeaseLockDuration:                  cfg.LeaseLockDuration(),
-			LeaseLockRefreshInterval:           cfg.LeaseLockRefreshInterval(),
-			LogFileDir:                         cfg.LogFileDir(),
-			LogLevel:                           cfg.LogLevel(),
-			LogSQL:                             cfg.LogSQL(),
-			LogSQLMigrations:                   cfg.LogSQLMigrations(),
-			LogToDisk:                          cfg.LogToDisk(),
+			AdvisoryLockCheckInterval:      cfg.AdvisoryLockCheckInterval(),
+			AdvisoryLockID:                 cfg.AdvisoryLockID(),
+			AllowOrigins:                   cfg.AllowOrigins(),
+			BlockBackfillDepth:             cfg.BlockBackfillDepth(),
+			BridgeResponseURL:              bridgeResponseURL,
+			DatabaseBackupFrequency:        cfg.DatabaseBackupFrequency(),
+			DatabaseBackupMode:             string(cfg.DatabaseBackupMode()),
+			DatabaseBackupOnVersionUpgrade: cfg.DatabaseBackupOnVersionUpgrade(),
+			DatabaseLockingMode:            cfg.DatabaseLockingMode(),
+			DefaultChainID:                 cfg.DefaultChainID().String(),
+			DefaultHTTPLimit:               cfg.DefaultHTTPLimit(),
+			DefaultHTTPTimeout:             cfg.DefaultHTTPTimeout(),
+			Dev:                            cfg.Dev(),
+			ShutdownGracePeriod:            cfg.ShutdownGracePeriod(),
+			EVMRPCEnabled:                  cfg.EVMRPCEnabled(),
+			EthereumHTTPURL:                ethereumHTTPURL,
+			EthereumSecondaryURLs:          mapToStringA(cfg.EthereumSecondaryURLs()),
+			EthereumURL:                    cfg.EthereumURL(),
+			ExplorerURL:                    explorerURL,
+			FMDefaultTransactionQueueDepth: cfg.FMDefaultTransactionQueueDepth(),
+			FeatureExternalInitiators:      cfg.FeatureExternalInitiators(),
+			FeatureOffchainReporting:       cfg.FeatureOffchainReporting(),
+			InsecureFastScrypt:             cfg.InsecureFastScrypt(),
+			JSONConsole:                    cfg.JSONConsole(),
+			JobPipelineReaperInterval:      cfg.JobPipelineReaperInterval(),
+			JobPipelineReaperThreshold:     cfg.JobPipelineReaperThreshold(),
+
+			// Keeper
+			KeeperDefaultTransactionQueueDepth:      cfg.KeeperDefaultTransactionQueueDepth(),
+			KeeperGasPriceBufferPercent:             cfg.KeeperGasPriceBufferPercent(),
+			KeeperGasTipCapBufferPercent:            cfg.KeeperGasTipCapBufferPercent(),
+			KeeperBaseFeeBufferPercent:              cfg.KeeperBaseFeeBufferPercent(),
+			KeeperMaximumGracePeriod:                cfg.KeeperMaximumGracePeriod(),
+			KeeperRegistryCheckGasOverhead:          cfg.KeeperRegistryCheckGasOverhead(),
+			KeeperRegistryPerformGasOverhead:        cfg.KeeperRegistryPerformGasOverhead(),
+			KeeperRegistrySyncInterval:              cfg.KeeperRegistrySyncInterval(),
+			KeeperRegistrySyncUpkeepQueueSize:       cfg.KeeperRegistrySyncUpkeepQueueSize(),
+			KeeperCheckUpkeepGasPriceFeatureEnabled: cfg.KeeperCheckUpkeepGasPriceFeatureEnabled(),
+			KeeperTurnLookBack:                      cfg.KeeperTurnLookBack(),
+			KeeperTurnFlagEnabled:                   cfg.KeeperTurnFlagEnabled(),
+
+			LeaseLockDuration:        cfg.LeaseLockDuration(),
+			LeaseLockRefreshInterval: cfg.LeaseLockRefreshInterval(),
+			LogFileDir:               cfg.LogFileDir(),
+			LogFileMaxSize:           cfg.LogFileMaxSize(),
+			LogFileMaxAge:            cfg.LogFileMaxAge(),
+			LogFileMaxBackups:        cfg.LogFileMaxBackups(),
+			LogLevel:                 cfg.LogLevel(),
+			LogSQL:                   cfg.LogSQL(),
 
 			// OCRV1
 			OCRContractTransmitterTransmitTimeout: ocrTransmitTimeout,
@@ -202,7 +225,6 @@ func NewConfigPrinter(cfg GeneralConfig) ConfigPrinter {
 
 			Port:                          cfg.Port(),
 			ReaperExpiration:              cfg.ReaperExpiration(),
-			ReplayFromBlock:               cfg.ReplayFromBlock(),
 			RootDir:                       cfg.RootDir(),
 			SecureCookies:                 cfg.SecureCookies(),
 			SessionTimeout:                cfg.SessionTimeout(),

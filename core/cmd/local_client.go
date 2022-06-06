@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"log"
 	"math/big"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -22,18 +23,19 @@ import (
 	"github.com/fatih/color"
 	"github.com/kylelemons/godebug/diff"
 	"github.com/pkg/errors"
+	"github.com/smartcontractkit/sqlx"
 	clipkg "github.com/urfave/cli"
 	"go.uber.org/multierr"
+	"golang.org/x/sync/errgroup"
 	"gopkg.in/guregu/null.v4"
 
-	"github.com/smartcontractkit/sqlx"
-
+	"github.com/smartcontractkit/chainlink/core/chains/evm/txmgr"
 	"github.com/smartcontractkit/chainlink/core/config"
 	"github.com/smartcontractkit/chainlink/core/logger"
 	"github.com/smartcontractkit/chainlink/core/services"
-	"github.com/smartcontractkit/chainlink/core/services/bulletprooftxmanager"
 	"github.com/smartcontractkit/chainlink/core/services/pg"
 	"github.com/smartcontractkit/chainlink/core/sessions"
+	"github.com/smartcontractkit/chainlink/core/shutdown"
 	"github.com/smartcontractkit/chainlink/core/static"
 	"github.com/smartcontractkit/chainlink/core/store/dialects"
 	"github.com/smartcontractkit/chainlink/core/store/migrate"
@@ -44,12 +46,16 @@ import (
 // ownerPermsMask are the file permission bits reserved for owner.
 const ownerPermsMask = os.FileMode(0700)
 
+// PristineDBName is a clean copy of test DB with migrations.
+// Used by heavyweight.FullTestDB* functions.
+const PristineDBName = "chainlink_test_pristine"
+
 // RunNode starts the Chainlink core.
 func (cli *Client) RunNode(c *clipkg.Context) error {
 	if err := cli.runNode(c); err != nil {
 		err = errors.Wrap(err, "Cannot boot Chainlink")
-		cli.Logger.Error(err)
-		if serr := cli.Logger.Sync(); serr != nil {
+		cli.Logger.Errorw(err.Error(), "err", err)
+		if serr := cli.CloseLogger(); serr != nil {
 			err = multierr.Combine(serr, err)
 		}
 		return cli.errorOut(err)
@@ -58,7 +64,7 @@ func (cli *Client) RunNode(c *clipkg.Context) error {
 }
 
 func (cli *Client) runNode(c *clipkg.Context) error {
-	lggr := cli.Logger.Named("boot")
+	lggr := cli.Logger.Named("RunNode")
 
 	err := cli.Config.Validate()
 	if err != nil {
@@ -70,13 +76,60 @@ func (cli *Client) runNode(c *clipkg.Context) error {
 	if cli.Config.Dev() {
 		lggr.Warn("Chainlink is running in DEVELOPMENT mode. This is a security risk if enabled in production.")
 	}
-	if cli.Config.EthereumDisabled() {
-		lggr.Warn("Ethereum is disabled. Chainlink will only run services that can operate without an ethereum connection")
-	}
 
-	app, err := cli.AppFactory.NewApplication(cli.Config)
+	ldb := pg.NewLockedDB(cli.Config, lggr)
+
+	// rootCtx will be cancelled when SIGINT|SIGTERM is received
+	rootCtx, cancelRootCtx := context.WithCancel(context.Background())
+
+	// cleanExit is used to skip "fail fast" routine
+	cleanExit := make(chan struct{})
+	var shutdownStartTime time.Time
+	defer func() {
+		close(cleanExit)
+		if !shutdownStartTime.IsZero() {
+			log.Printf("Graceful shutdown time: %s", time.Since(shutdownStartTime))
+		}
+	}()
+
+	go shutdown.HandleShutdown(func(sig string) {
+		lggr.Infof("Shutting down due to %s signal received...", sig)
+
+		shutdownStartTime = time.Now()
+		cancelRootCtx()
+
+		select {
+		case <-cleanExit:
+			return
+		case <-time.After(cli.Config.ShutdownGracePeriod()):
+		}
+
+		lggr.Criticalf("Shutdown grace period of %v exceeded, closing DB and exiting...", cli.Config.ShutdownGracePeriod())
+		// LockedDB.Close() will release DB locks and close DB connection
+		// Executing this explicitly because defers are not executed in case of os.Exit()
+		if err = ldb.Close(); err != nil {
+			lggr.Criticalf("Failed to close LockedDB: %v", err)
+		}
+		if err = cli.CloseLogger(); err != nil {
+			log.Printf("Failed to close Logger: %v", err)
+		}
+
+		os.Exit(-1)
+	})
+
+	// Try opening DB connection and acquiring DB locks at once
+	if err = ldb.Open(rootCtx); err != nil {
+		// If not successful, we know neither locks nor connection remains opened
+		return cli.errorOut(errors.Wrap(err, "opening db"))
+	}
+	defer lggr.ErrorIfClosing(ldb, "db")
+
+	// From now on, DB locks and DB connection will be released on every return.
+	// Keep watching on logger.Fatal* calls and os.Exit(), because defer will not be executed.
+
+	app, err := cli.AppFactory.NewApplication(cli.Config, ldb.DB())
 	if err != nil {
-		return errors.Wrap(err, "error initializing application")
+		return cli.errorOut(errors.Wrap(err, "fatal error instantiating application"))
 	}
 
 	sessionORM := app.SessionORM()
@@ -97,65 +150,66 @@ func (cli *Client) runNode(c *clipkg.Context) error {
 		}
 	}
 
-	chainSet := app.GetChainSet()
-	dflt, err := chainSet.Default()
-	if err != nil {
-		return errors.Wrap(err, "failed to get default chainset")
-	}
-	err = keyStore.Migrate(vrfpwd, dflt.ID())
-	if err != nil {
-		return errors.Wrap(err, "error migrating keystore")
-	}
-
-	for _, ch := range chainSet.Chains() {
-		skey, sexisted, fkey, fexisted, err2 := app.GetKeyStore().Eth().EnsureKeys(ch.ID())
+	evmChainSet := app.GetChains().EVM
+	// By passing in a function we can be lazy trying to look up a default
+	// chain - if there are no existing keys, there is no need to check for
+	// a chain ID
+	DefaultEVMChainIDFunc := func() (*big.Int, error) {
+		def, err2 := evmChainSet.Default()
 		if err2 != nil {
-			return errors.Wrap(err2, "failed to ensure keystore keys")
+			return nil, errors.Wrap(err2, "cannot get default EVM chain ID; no default EVM chain available")
 		}
-		if !fexisted {
-			lggr.Infow("New funding address created", "address", fkey.Address.Hex(), "evmChainID", ch.ID())
+		return def.ID(), nil
+	}
+	err = keyStore.Migrate(vrfpwd, DefaultEVMChainIDFunc)
+
+	if cli.Config.EVMEnabled() {
+		if err != nil {
+			return errors.Wrap(err, "error migrating keystore")
 		}
-		if !sexisted {
-			lggr.Infow("New sending address created", "address", skey.Address.Hex(), "evmChainID", ch.ID())
+
+		for _, ch := range evmChainSet.Chains() {
+			err2 := app.GetKeyStore().Eth().EnsureKeys(ch.ID())
+			if err2 != nil {
+				return errors.Wrap(err2, "failed to ensure keystore keys")
+			}
 		}
 	}
 
-	ocrKey, didExist, err := app.GetKeyStore().OCR().EnsureKey()
-	if err != nil {
-		return errors.Wrap(err, "failed to ensure ocr key")
-	}
-	if !didExist {
-		lggr.Infof("Created OCR key with ID %s", ocrKey.ID())
-	}
-	ocr2Keys, keysDidExist, err := app.GetKeyStore().OCR2().EnsureKeys()
-	if err != nil {
-		return errors.Wrap(err, "failed to ensure ocr key")
-	}
-	for chainType, didExist := range keysDidExist {
-		if !didExist {
-			lggr.Infof("Created OCR2 key with ID %s", ocr2Keys[chainType].ID())
+	if cli.Config.FeatureOffchainReporting() {
+		err2 := app.GetKeyStore().OCR().EnsureKey()
+		if err2 != nil {
+			return errors.Wrap(err2, "failed to ensure ocr key")
 		}
 	}
-	p2pKey, didExist, err := app.GetKeyStore().P2P().EnsureKey()
-	if err != nil {
-		return errors.Wrap(err, "failed to ensure p2p key")
+	if cli.Config.FeatureOffchainReporting2() {
+		err2 := app.GetKeyStore().OCR2().EnsureKeys()
+		if err2 != nil {
+			return errors.Wrap(err2, "failed to ensure ocr key")
+		}
 	}
-	if !didExist {
-		lggr.Infof("Created P2P key with ID %s", p2pKey.ID())
+	if cli.Config.P2PEnabled() {
+		err2 := app.GetKeyStore().P2P().EnsureKey()
+		if err2 != nil {
+			return errors.Wrap(err2, "failed to ensure p2p key")
+		}
 	}
-	solanaKey, didExist, err := app.GetKeyStore().Solana().EnsureKey()
-	if err != nil {
-		return errors.Wrap(err, "failed to ensure solana key")
+	if cli.Config.SolanaEnabled() {
+		err2 := app.GetKeyStore().Solana().EnsureKey()
+		if err2 != nil {
+			return errors.Wrap(err2, "failed to ensure solana key")
+		}
 	}
-	if !didExist {
-		lggr.Infof("Created Solana key with ID %s", solanaKey.ID())
+	if cli.Config.TerraEnabled() {
+		err2 := app.GetKeyStore().Terra().EnsureKey()
+		if err2 != nil {
+			return errors.Wrap(err2, "failed to ensure terra key")
+		}
 	}
-	terraKey, didExist, err := app.GetKeyStore().Terra().EnsureKey()
-	if err != nil {
-		return errors.Wrap(err, "failed to ensure terra key")
-	}
-	if !didExist {
-		lggr.Infof("Created Terra key with ID %s", terraKey.ID())
+
+	err2 := app.GetKeyStore().CSA().EnsureKey()
+	if err2 != nil {
+		return errors.Wrap(err2, "failed to ensure CSA key")
 	}
 
 	if e := checkFilePermissions(lggr, cli.Config.RootDir()); e != nil {
@@ -163,31 +217,51 @@ func (cli *Client) runNode(c *clipkg.Context) error {
 	}
 
 	var user sessions.User
-	if _, err = NewFileAPIInitializer(c.String("api"), lggr).Initialize(sessionORM); err != nil && err != ErrNoCredentialFile {
+	if _, err = NewFileAPIInitializer(c.String("api"), lggr).Initialize(sessionORM); err != nil && !errors.Is(err, ErrNoCredentialFile) {
 		return errors.Wrap(err, "error creating api initializer")
 	}
 	if user, err = cli.FallbackAPIInitializer.Initialize(sessionORM); err != nil {
-		if err == ErrorNoAPICredentialsAvailable {
+		if errors.Is(err, ErrorNoAPICredentialsAvailable) {
 			return errors.WithStack(err)
 		}
 		return errors.Wrap(err, "error creating fallback initializer")
 	}
 
 	lggr.Info("API exposed for user ", user.Email)
-	if err = app.Start(); err != nil {
+
+	if err = app.Start(rootCtx); err != nil {
+		// We do not try stopping any sub-services that might be started,
+		// because the app will exit immediately upon return.
+		// But LockedDB will be released by defer in above.
 		return errors.Wrap(err, "error starting app")
 	}
-	defer func() {
-		lggr.ErrorIf(app.Stop(), "Error stopping app")
-		if err = lggr.Sync(); err != nil {
-			log.Fatal(err)
+
+	grp, grpCtx := errgroup.WithContext(rootCtx)
+
+	grp.Go(func() error {
+		<-grpCtx.Done()
+		if errInternal := app.Stop(); errInternal != nil {
+			return errors.Wrap(errInternal, "error stopping app")
 		}
-	}()
+		return nil
+	})
 
 	lggr.Debug("Environment variables\n", config.NewConfigPrinter(cli.Config))
 
 	lggr.Infow(fmt.Sprintf("Chainlink booted in %.2fs", time.Since(static.InitTime).Seconds()), "appID", app.ID())
-	return (cli.Runner.Run(app))
+
+	grp.Go(func() error {
+		errInternal := cli.Runner.Run(grpCtx, app)
+		if errors.Is(errInternal, http.ErrServerClosed) {
+			errInternal = nil
+		}
+		// In tests we have custom runners that stop the app gracefully,
+		// therefore we need to cancel rootCtx when the Runner has quit.
+		cancelRootCtx()
+		return errInternal
+	})
+
+	return grp.Wait()
 }
 
 func checkFilePermissions(lggr logger.Logger, rootDir string) error {
@@ -282,9 +356,16 @@ func (cli *Client) RebroadcastTransactions(c *clipkg.Context) (err error) {
 		}
 	}
 
-	app, err := cli.AppFactory.NewApplication(cli.Config)
+	lggr := cli.Logger.Named("RebroadcastTransactions")
+	db, err := pg.OpenUnlockedDB(cli.Config, lggr)
 	if err != nil {
-		return cli.errorOut(errors.Wrap(err, "creating application"))
+		return cli.errorOut(errors.Wrap(err, "opening DB"))
+	}
+	defer lggr.ErrorIfClosing(db, "db")
+
+	app, err := cli.AppFactory.NewApplication(cli.Config, db)
+	if err != nil {
+		return cli.errorOut(errors.Wrap(err, "fatal error instantiating application"))
 	}
 	defer func() {
 		if serr := app.Stop(); serr != nil {
@@ -295,7 +376,7 @@ func (cli *Client) RebroadcastTransactions(c *clipkg.Context) (err error) {
 	if err != nil {
 		return cli.errorOut(fmt.Errorf("error reading password: %+v", err))
 	}
-	chain, err := app.GetChainSet().Get(chainID)
+	chain, err := app.GetChains().EVM.Get(chainID)
 	if err != nil {
 		return cli.errorOut(err)
 	}
@@ -319,7 +400,7 @@ func (cli *Client) RebroadcastTransactions(c *clipkg.Context) (err error) {
 	if err != nil {
 		return cli.errorOut(err)
 	}
-	ec := bulletprooftxmanager.NewEthConfirmer(app.GetSqlxDB(), ethClient, chain.Config(), keyStore.Eth(), keyStates, nil, nil, chain.Logger())
+	ec := txmgr.NewEthConfirmer(app.GetSqlxDB(), ethClient, chain.Config(), keyStore.Eth(), keyStates, nil, nil, chain.Logger())
 	err = ec.ForceRebroadcast(beginningNonce, endingNonce, gasPriceWei, address, overrideGasLimit)
 	return cli.errorOut(err)
 }
@@ -425,6 +506,19 @@ func (cli *Client) PrepareTestDatabase(c *clipkg.Context) error {
 		return cli.errorOut(err)
 	}
 	cfg := cli.Config
+
+	// Creating pristine DB copy to speed up FullTestDB
+	dbUrl := cfg.DatabaseURL()
+	db, err := sql.Open(string(dialects.Postgres), dbUrl.String())
+	defer db.Close()
+	if err != nil {
+		return cli.errorOut(err)
+	}
+	templateDB := strings.Trim(dbUrl.Path, "/")
+	if err = dropAndCreatePristineDB(db, templateDB); err != nil {
+		return cli.errorOut(err)
+	}
+
 	userOnly := c.Bool("user-only")
 	var fixturePath = "../store/fixtures/fixtures.sql"
 	if userOnly {
@@ -433,6 +527,7 @@ func (cli *Client) PrepareTestDatabase(c *clipkg.Context) error {
 	if err := insertFixtures(cfg, fixturePath); err != nil {
 		return cli.errorOut(err)
 	}
+
 	return nil
 }
 
@@ -578,6 +673,18 @@ func dropAndCreateDB(parsed url.URL) (err error) {
 	return nil
 }
 
+func dropAndCreatePristineDB(db *sql.DB, template string) (err error) {
+	_, err = db.Exec(fmt.Sprintf(`DROP DATABASE IF EXISTS "%s"`, PristineDBName))
+	if err != nil {
+		return fmt.Errorf("unable to drop postgres database: %v", err)
+	}
+	_, err = db.Exec(fmt.Sprintf(`CREATE DATABASE "%s" WITH TEMPLATE "%s"`, PristineDBName, template))
+	if err != nil {
+		return fmt.Errorf("unable to create postgres database: %v", err)
+	}
+	return nil
+}
+
 func migrateDB(config config.GeneralConfig, lggr logger.Logger) error {
 	db, err := newConnection(config, lggr)
 	if err != nil {
@@ -655,30 +762,6 @@ func insertFixtures(config config.GeneralConfig, pathToFixtures string) (err err
 		return err
 	}
 	_, err = db.Exec(string(fixturesSQL))
-	return err
-}
-
-// DeleteUser is run locally to remove the User row from the node's database.
-func (cli *Client) DeleteUser(c *clipkg.Context) (err error) {
-	app, err := cli.AppFactory.NewApplication(cli.Config)
-	if err != nil {
-		return cli.errorOut(errors.Wrap(err, "creating application"))
-	}
-	defer func() {
-		if serr := app.Stop(); serr != nil {
-			err = multierr.Append(err, serr)
-		}
-	}()
-	orm := app.SessionORM()
-	user, err := orm.FindUser()
-	if err == nil {
-		app.GetLogger().Info("No such API user ", user.Email)
-		return err
-	}
-	err = orm.DeleteUser()
-	if err == nil {
-		app.GetLogger().Info("Deleted API user ", user.Email)
-	}
 	return err
 }
 

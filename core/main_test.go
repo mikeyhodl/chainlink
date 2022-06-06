@@ -12,20 +12,29 @@ import (
 	"github.com/smartcontractkit/chainlink/core/cmd"
 	"github.com/smartcontractkit/chainlink/core/internal/cltest"
 	"github.com/smartcontractkit/chainlink/core/logger"
+	"github.com/smartcontractkit/chainlink/core/static"
 )
+
+func init() {
+	static.Version = "0.0.0"
+	static.Sha = "exampleSHA"
+}
 
 func run(args ...string) {
 	t := &testing.T{}
 	tc := cltest.NewTestGeneralConfig(t)
+	tc.SetRootDir("/foo")
 	tc.Overrides.Dev = null.BoolFrom(false)
+	lggr := logger.TestLogger(t)
 	testClient := &cmd.Client{
 		Renderer:               cmd.RendererTable{Writer: ioutil.Discard},
 		Config:                 tc,
-		Logger:                 logger.TestLogger(t),
+		Logger:                 lggr,
+		CloseLogger:            lggr.Sync,
 		AppFactory:             cmd.ChainlinkAppFactory{},
 		FallbackAPIInitializer: cltest.NewMockAPIInitializer(t),
 		Runner:                 cmd.ChainlinkRunner{},
-		HTTP:                   cltest.NewMockAuthenticatedHTTPClient(tc, "session"),
+		HTTP:                   cltest.NewMockAuthenticatedHTTPClient(lggr, cmd.ClientOpts{}, "session"),
 		ChangePasswordPrompter: cltest.MockChangePasswordPrompter{},
 	}
 	args = append([]string{""}, args...)
@@ -43,7 +52,7 @@ func ExampleRun() {
 	//    core.test [global options] command [command options] [arguments...]
 	//
 	// VERSION:
-	//    unset@unset
+	//    0.0.0@exampleSHA
 	//
 	// COMMANDS:
 	//    admin           Commands for remotely taking admin related actions
@@ -54,16 +63,20 @@ func ExampleRun() {
 	//    jobs            Commands for managing Jobs
 	//    keys            Commands for managing various types of keys used by the Chainlink node
 	//    node, local     Commands for admin actions that must be run locally
-	//    txs             Commands for handling Ethereum transactions
+	//    txs             Commands for handling transactions
 	//    chains          Commands for handling chain configuration
 	//    nodes           Commands for handling node configuration
+	//    forwarders      Commands for managing forwarder addresses.
 	//    help, h         Shows a list of commands or help for one command
 	//
 	// GLOBAL OPTIONS:
-	//    --json, -j     json output as opposed to table
-	//    --help, -h     show help
-	//    --version, -v  print the version
-	// core.test version unset@unset
+	//    --json, -j                     json output as opposed to table
+	//    --admin-credentials-file FILE  optional, applies only in client mode when making remote API calls. If provided, FILE containing admin credentials will be used for logging in, allowing to avoid an additional login step. If `FILE` is missing, it will be ignored (default: "/foo/apicredentials")
+	//    --remote-node-url URL          optional, applies only in client mode when making remote API calls. If provided, URL will be used as the remote Chainlink API endpoint (default: "http://localhost:6688")
+	//    --insecure-skip-verify         optional, applies only in client mode when making remote API calls. If turned on, SSL certificate verification will be disabled. This is mostly useful for people who want to use Chainlink with a self-signed TLS certificate
+	//    --help, -h                     show help
+	//    --version, -v                  print the version
+	// core.test version 0.0.0@exampleSHA
 }
 
 func ExampleRun_admin() {
@@ -147,7 +160,6 @@ func ExampleRun_config() {
 	//    list         Show the node's environment variables
 	//    setgasprice  Set the default gas price to use for outgoing transactions
 	//    loglevel     Set log level
-	//    logpkg       Set package specific logging
 	//    logsql       Enable/disable sql statement logging
 	//
 	// OPTIONS:
@@ -189,8 +201,8 @@ func ExampleRun_keys() {
 	//    csa     Remote commands for administering the node's CSA keys
 	//    ocr     Remote commands for administering the node's legacy off chain reporting keys
 	//    ocr2    Remote commands for administering the node's off chain reporting keys
-	//    solana  Remote commands for administering the node's solana keys
-	//    terra   Remote commands for administering the node's terra keys
+	//    solana  Remote commands for administering the node's Solana keys
+	//    terra   Remote commands for administering the node's Terra keys
 	//    vrf     Remote commands for administering the node's vrf keys
 	//
 	// OPTIONS:
@@ -301,7 +313,7 @@ func ExampleRun_keys_solana() {
 	run("keys", "solana", "--help")
 	// Output:
 	// NAME:
-	//    core.test keys solana - Remote commands for administering the node's solana keys
+	//    core.test keys solana - Remote commands for administering the node's Solana keys
 	//
 	// USAGE:
 	//    core.test keys solana command [command options] [arguments...]
@@ -321,7 +333,7 @@ func ExampleRun_keys_terra() {
 	run("keys", "terra", "--help")
 	// Output:
 	// NAME:
-	//    core.test keys terra - Remote commands for administering the node's terra keys
+	//    core.test keys terra - Remote commands for administering the node's Terra keys
 	//
 	// USAGE:
 	//    core.test keys terra command [command options] [arguments...]
@@ -367,11 +379,11 @@ func ExampleRun_node() {
 	//    core.test node command [command options] [arguments...]
 	//
 	// COMMANDS:
-	//    deleteuser                Erase the *local node's* user and corresponding session to force recreation on next node launch.
 	//    setnextnonce              Manually set the next nonce for a key. This should NEVER be necessary during normal operation. USE WITH CAUTION: Setting this incorrectly can break your node.
 	//    start, node, n            Run the Chainlink node
 	//    rebroadcast-transactions  Manually rebroadcast txs matching nonce range with the specified gas price. This is useful in emergencies e.g. high gas prices and/or network congestion to forcibly clear out the pending TX queue
 	//    status                    Displays the health of various services running inside the node.
+	//    profile                   Collects profile metrics from the node.
 	//    db                        Commands for managing the database.
 	//
 	// OPTIONS:
@@ -413,19 +425,83 @@ func ExampleRun_node_db() {
 	//    --help, -h  show help
 }
 
+func ExampleRun_node_profile() {
+	run("node", "profile", "--help")
+	// Output:
+	// NAME:
+	//    core.test node profile - Collects profile metrics from the node.
+	//
+	// USAGE:
+	//    core.test node profile [command options] [arguments...]
+	//
+	// OPTIONS:
+	//    --seconds value, -s value     duration of profile capture (default: 8)
+	//    --output_dir value, -o value  output directory of the captured profile (default: "/tmp/")
+}
+
 func ExampleRun_txs() {
 	run("txs", "--help")
 	// Output:
 	// NAME:
-	//    core.test txs - Commands for handling Ethereum transactions
+	//    core.test txs - Commands for handling transactions
 	//
 	// USAGE:
 	//    core.test txs command [command options] [arguments...]
 	//
 	// COMMANDS:
-	//    create  Send <amount> Eth from node ETH account <fromAddress> to destination <toAddress>.
+	//    evm     Commands for handling EVM transactions
+	//    solana  Commands for handling Solana transactions
+	//    terra   Commands for handling Terra transactions
+	//
+	// OPTIONS:
+	//    --help, -h  show help
+}
+
+func ExampleRun_txs_evm() {
+	run("txs", "evm", "--help")
+	// Output:
+	// NAME:
+	//    core.test txs evm - Commands for handling EVM transactions
+	//
+	// USAGE:
+	//    core.test txs evm command [command options] [arguments...]
+	//
+	// COMMANDS:
+	//    create  Send <amount> ETH (or wei) from node ETH account <fromAddress> to destination <toAddress>.
 	//    list    List the Ethereum Transactions in descending order
 	//    show    get information on a specific Ethereum Transaction
+	//
+	// OPTIONS:
+	//    --help, -h  show help
+}
+
+func ExampleRun_txs_solana() {
+	run("txs", "solana", "--help")
+	// Output:
+	// NAME:
+	//    core.test txs solana - Commands for handling Solana transactions
+	//
+	// USAGE:
+	//    core.test txs solana command [command options] [arguments...]
+	//
+	// COMMANDS:
+	//    create  Send <amount> lamports from node Solana account <fromAddress> to destination <toAddress>.
+	//
+	// OPTIONS:
+	//    --help, -h  show help
+}
+
+func ExampleRun_txs_terra() {
+	run("txs", "terra", "--help")
+	// Output:
+	// NAME:
+	//    core.test txs terra - Commands for handling Terra transactions
+	//
+	// USAGE:
+	//    core.test txs terra command [command options] [arguments...]
+	//
+	// COMMANDS:
+	//    create  Send <amount> Luna from node Terra account <fromAddress> to destination <toAddress>.
 	//
 	// OPTIONS:
 	//    --help, -h  show help
@@ -441,7 +517,9 @@ func ExampleRun_chains() {
 	//    core.test chains command [command options] [arguments...]
 	//
 	// COMMANDS:
-	//    evm  Commands for handling EVM chains
+	//    evm     Commands for handling EVM chains
+	//    solana  Commands for handling Solana chains
+	//    terra   Commands for handling Terra chains
 	//
 	// OPTIONS:
 	//    --help, -h  show help
@@ -458,9 +536,47 @@ func ExampleRun_chains_evm() {
 	//
 	// COMMANDS:
 	//    create     Create a new EVM chain
-	//    delete     Delete an EVM chain
-	//    list       List all chains
-	//    configure  Configure an EVM chain
+	//    delete     Delete an existing EVM chain
+	//    list       List all existing EVM chains
+	//    configure  Configure an existing EVM chain
+	//
+	// OPTIONS:
+	//    --help, -h  show help
+}
+
+func ExampleRun_chains_solana() {
+	run("chains", "solana", "--help")
+	// Output:
+	// NAME:
+	//    core.test chains solana - Commands for handling Solana chains
+	//
+	// USAGE:
+	//    core.test chains solana command [command options] [arguments...]
+	//
+	// COMMANDS:
+	//    create     Create a new Solana chain
+	//    delete     Delete an existing Solana chain
+	//    list       List all existing Solana chains
+	//    configure  Configure an existing Solana chain
+	//
+	// OPTIONS:
+	//    --help, -h  show help
+}
+
+func ExampleRun_chains_terra() {
+	run("chains", "terra", "--help")
+	// Output:
+	// NAME:
+	//    core.test chains terra - Commands for handling Terra chains
+	//
+	// USAGE:
+	//    core.test chains terra command [command options] [arguments...]
+	//
+	// COMMANDS:
+	//    create     Create a new Terra chain
+	//    delete     Delete an existing Terra chain
+	//    list       List all existing Terra chains
+	//    configure  Configure an existing Terra chain
 	//
 	// OPTIONS:
 	//    --help, -h  show help
@@ -476,9 +592,81 @@ func ExampleRun_nodes() {
 	//    core.test nodes command [command options] [arguments...]
 	//
 	// COMMANDS:
-	//    create  Create a new node
-	//    delete  Delete a node
-	//    list    List all nodes
+	//    evm     Commands for handling EVM node configuration
+	//    solana  Commands for handling Solana node configuration
+	//    terra   Commands for handling Terra node configuration
+	//
+	// OPTIONS:
+	//    --help, -h  show help
+}
+
+func ExampleRun_nodes_evm() {
+	run("nodes", "evm", "--help")
+	// Output:
+	// NAME:
+	//    core.test nodes evm - Commands for handling EVM node configuration
+	//
+	// USAGE:
+	//    core.test nodes evm command [command options] [arguments...]
+	//
+	// COMMANDS:
+	//    create  Create a new EVM node
+	//    delete  Delete an existing EVM node
+	//    list    List all existing EVM nodes
+	//
+	// OPTIONS:
+	//    --help, -h  show help
+}
+
+func ExampleRun_nodes_solana() {
+	run("nodes", "solana", "--help")
+	// Output:
+	// NAME:
+	//    core.test nodes solana - Commands for handling Solana node configuration
+	//
+	// USAGE:
+	//    core.test nodes solana command [command options] [arguments...]
+	//
+	// COMMANDS:
+	//    create  Create a new Solana node
+	//    delete  Delete an existing Solana node
+	//    list    List all existing Solana nodes
+	//
+	// OPTIONS:
+	//    --help, -h  show help
+}
+
+func ExampleRun_nodes_terra() {
+	run("nodes", "terra", "--help")
+	// Output:
+	// NAME:
+	//    core.test nodes terra - Commands for handling Terra node configuration
+	//
+	// USAGE:
+	//    core.test nodes terra command [command options] [arguments...]
+	//
+	// COMMANDS:
+	//    create  Create a new Terra node
+	//    delete  Delete an existing Terra node
+	//    list    List all existing Terra nodes
+	//
+	// OPTIONS:
+	//    --help, -h  show help
+}
+
+func ExampleRun_forwarders() {
+	run("forwarders", "--help")
+	// Output:
+	// NAME:
+	//    core.test forwarders - Commands for managing forwarder addresses.
+	//
+	// USAGE:
+	//    core.test forwarders command [command options] [arguments...]
+	//
+	// COMMANDS:
+	//    list    List all stored forwarders addresses
+	//    create  Create a new forwarder
+	//    delete  Delete a forwarder address
 	//
 	// OPTIONS:
 	//    --help, -h  show help

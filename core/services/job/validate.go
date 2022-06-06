@@ -20,6 +20,8 @@ var (
 		Keeper:             {},
 		VRF:                {},
 		Webhook:            {},
+		BlockhashStore:     {},
+		Bootstrap:          {},
 	}
 )
 

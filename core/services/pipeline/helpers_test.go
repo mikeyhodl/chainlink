@@ -1,14 +1,13 @@
 package pipeline
 
 import (
+	"net/http"
+
 	uuid "github.com/satori/go.uuid"
 
-	"github.com/smartcontractkit/chainlink/core/chains/evm"
 	"github.com/smartcontractkit/sqlx"
-)
 
-var (
-	NewKeypathFromString = newKeypathFromString
+	"github.com/smartcontractkit/chainlink/core/chains/evm"
 )
 
 const (
@@ -23,22 +22,25 @@ const (
         ds2_parse    [type=jsonparse path="three,four"];
         ds2_multiply [type=multiply times=4.56];
 
-        ds1 -> ds1_parse -> ds1_multiply -> answer1;
+        ds1 -> ds1_parse -> ds1_multiply;
         ds2 -> ds2_parse -> ds2_multiply -> answer1;
 
-        answer1 [type=median                      index=0];
-        answer2 [type=bridge name=election_winner index=1];
+        answer1 [type=median	index=0 input1="$(ds1_multiply)" input2="$(ds2_multiply)"];
+        answer2 [type=bridge 	name=election_winner	index=1];
     `
 )
 
-func (t *BridgeTask) HelperSetDependencies(config Config, db *sqlx.DB, id uuid.UUID) {
+func (t *BridgeTask) HelperSetDependencies(config Config, db *sqlx.DB, id uuid.UUID, httpClient *http.Client) {
 	t.config = config
 	t.queryer = db
 	t.uuid = id
+	t.httpClient = httpClient
 }
 
-func (t *HTTPTask) HelperSetDependencies(config Config) {
+func (t *HTTPTask) HelperSetDependencies(config Config, restrictedHTTPClient, unrestrictedHTTPClient *http.Client) {
 	t.config = config
+	t.httpClient = restrictedHTTPClient
+	t.unrestrictedHTTPClient = unrestrictedHTTPClient
 }
 
 func (t *ETHCallTask) HelperSetDependencies(cc evm.ChainSet, config Config) {

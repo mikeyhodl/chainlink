@@ -6,14 +6,14 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
+//nolint
 var NullLogger Logger = &nullLogger{}
 
 type nullLogger struct{}
 
-func (l *nullLogger) With(args ...interface{}) Logger                 { return l }
-func (l *nullLogger) Named(name string) Logger                        { return l }
-func (l *nullLogger) NewRootLogger(lvl zapcore.Level) (Logger, error) { return l, nil }
-func (l *nullLogger) SetLogLevel(_ zapcore.Level)                     {}
+func (l *nullLogger) With(args ...interface{}) Logger { return l }
+func (l *nullLogger) Named(name string) Logger        { return l }
+func (l *nullLogger) SetLogLevel(_ zapcore.Level)     {}
 
 func (l *nullLogger) Trace(args ...interface{})    {}
 func (l *nullLogger) Debug(args ...interface{})    {}
@@ -38,13 +38,11 @@ func (l *nullLogger) Debugw(msg string, keysAndValues ...interface{})    {}
 func (l *nullLogger) Infow(msg string, keysAndValues ...interface{})     {}
 func (l *nullLogger) Warnw(msg string, keysAndValues ...interface{})     {}
 func (l *nullLogger) Errorw(msg string, keysAndValues ...interface{})    {}
-func (l *nullLogger) CriticalW(msg string, keysAndValues ...interface{}) {}
+func (l *nullLogger) Criticalw(msg string, keysAndValues ...interface{}) {}
 func (l *nullLogger) Panicw(msg string, keysAndValues ...interface{})    {}
 func (l *nullLogger) Fatalw(msg string, keysAndValues ...interface{})    {}
 
-func (l *nullLogger) WarnIf(err error, msg string)     {}
 func (l *nullLogger) ErrorIf(err error, msg string)    {}
-func (l *nullLogger) PanicIf(err error, msg string)    {}
 func (l *nullLogger) ErrorIfClosing(io.Closer, string) {}
 func (l *nullLogger) Sync() error                      { return nil }
 func (l *nullLogger) Helper(skip int) Logger           { return l }

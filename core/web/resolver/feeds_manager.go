@@ -3,49 +3,12 @@ package resolver
 import (
 	"context"
 	"errors"
-	"strings"
 
 	"github.com/graph-gophers/graphql-go"
 
 	"github.com/smartcontractkit/chainlink/core/services/feeds"
 	"github.com/smartcontractkit/chainlink/core/utils/stringutils"
 	"github.com/smartcontractkit/chainlink/core/web/loader"
-)
-
-type JobType string
-
-func ToJobType(s string) (JobType, error) {
-	switch s {
-	case "fluxmonitor":
-		return JobTypeFluxMonitor, nil
-	case "ocr":
-		return JobTypeOCR, nil
-	default:
-		return JobType(""), errors.New("invalid job type")
-	}
-}
-
-// FromJobType converts a JoyType into a string which is used to create/update
-// a feeds manager.
-//
-// FluxMonitor is a special case because the FeedsManager expects a 'fluxmonitor'
-// string rather than just the lowercased value.
-//
-// Note: We should change the flux monitor service methods to accept an enum for
-// the job type to add more consistency.
-func FromJobTypeInput(jt JobType) string {
-	switch jt {
-	// Handle the special case of flux monitor string
-	case JobTypeFluxMonitor:
-		return "fluxmonitor"
-	default:
-		return strings.ToLower(string(jt))
-	}
-}
-
-const (
-	JobTypeFluxMonitor JobType = "FLUX_MONITOR"
-	JobTypeOCR         JobType = "OCR"
 )
 
 // FeedsManagerResolver resolves the FeedsManager type.
@@ -86,19 +49,6 @@ func (r *FeedsManagerResolver) PublicKey() string {
 	return r.mgr.PublicKey.String()
 }
 
-// JobTypes resolves the feed managers's jobTypes field.
-func (r *FeedsManagerResolver) JobTypes() []JobType {
-	var jts []JobType
-
-	for _, s := range r.mgr.JobTypes {
-		if jt, err := ToJobType(s); err == nil {
-			jts = append(jts, jt)
-		}
-	}
-
-	return jts
-}
-
 func (r *FeedsManagerResolver) JobProposals(ctx context.Context) ([]*JobProposalResolver, error) {
 	jps, err := loader.GetJobProposalsByFeedsManagerID(ctx, stringutils.FromInt64(r.mgr.ID))
 	if err != nil {
@@ -108,19 +58,18 @@ func (r *FeedsManagerResolver) JobProposals(ctx context.Context) ([]*JobProposal
 	return NewJobProposals(jps), nil
 }
 
-// IsBootstrapPeer resolves the feed managers's isBootstrapPeer field.
-func (r *FeedsManagerResolver) IsBootstrapPeer() bool {
-	return r.mgr.IsOCRBootstrapPeer
-}
-
 // IsConnectionActive resolves the feed managers's isConnectionActive field.
 func (r *FeedsManagerResolver) IsConnectionActive() bool {
 	return r.mgr.IsConnectionActive
 }
 
-// BootstrapPeer resolves the feed managers's isConnectionActive field.
-func (r *FeedsManagerResolver) BootstrapPeerMultiaddr() *string {
-	return r.mgr.OCRBootstrapPeerMultiaddr.Ptr()
+func (r *FeedsManagerResolver) ChainConfigs(ctx context.Context) ([]*FeedsManagerChainConfigResolver, error) {
+	cfgs, err := loader.GetFeedsManagerChainConfigsByManagerID(ctx, r.mgr.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	return NewFeedsManagerChainConfigs(cfgs), nil
 }
 
 // CreatedAt resolves the chains's created at field.
@@ -170,7 +119,7 @@ func (r *FeedsManagersPayloadResolver) Results() []*FeedsManagerResolver {
 
 // -- CreateFeedsManager Mutation --
 
-// CreateFeedsManagerPayloadResolver
+// CreateFeedsManagerPayloadResolver -
 type CreateFeedsManagerPayloadResolver struct {
 	mgr *feeds.FeedsManager
 	// inputErrors maps an input path to a string
@@ -232,6 +181,7 @@ func (r *CreateFeedsManagerSuccessResolver) FeedsManager() *FeedsManagerResolver
 	return NewFeedsManager(r.mgr)
 }
 
+// SingleFeedsManagerErrorResolver -
 type SingleFeedsManagerErrorResolver struct {
 	message string
 }
@@ -252,7 +202,7 @@ func (r *SingleFeedsManagerErrorResolver) Code() ErrorCode {
 
 // -- UpdateFeedsManager Mutation --
 
-// UpdateFeedsManagerPayloadResolver
+// UpdateFeedsManagerPayloadResolver -
 type UpdateFeedsManagerPayloadResolver struct {
 	mgr       *feeds.FeedsManager
 	inputErrs map[string]string

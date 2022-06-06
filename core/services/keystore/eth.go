@@ -27,21 +27,21 @@ type Eth interface {
 	Import(keyJSON []byte, password string, chainID *big.Int) (ethkey.KeyV2, error)
 	Export(id string, password string) ([]byte, error)
 
-	EnsureKeys(chainID *big.Int) (ethkey.KeyV2, bool, ethkey.KeyV2, bool, error)
+	EnsureKeys(chainID *big.Int) error
 	SubscribeToKeyChanges() (ch chan struct{}, unsub func())
 
 	SignTx(fromAddress common.Address, tx *types.Transaction, chainID *big.Int) (*types.Transaction, error)
 
-	SendingKeys() (keys []ethkey.KeyV2, err error)
+	SendingKeys(chainID *big.Int) (keys []ethkey.KeyV2, err error)
 	FundingKeys() (keys []ethkey.KeyV2, err error)
-	GetRoundRobinAddress(addresses ...common.Address) (address common.Address, err error)
+	GetRoundRobinAddress(chainID *big.Int, addresses ...common.Address) (address common.Address, err error)
 
 	GetState(id string) (ethkey.State, error)
 	SetState(ethkey.State) error
 	GetStatesForKeys([]ethkey.KeyV2) ([]ethkey.State, error)
 	GetStatesForChain(chainID *big.Int) ([]ethkey.State, error)
 
-	GetV1KeysAsV2(chainID *big.Int) ([]ethkey.KeyV2, []ethkey.State, error)
+	GetV1KeysAsV2(f DefaultEVMChainIDFunc) ([]ethkey.KeyV2, []ethkey.State, error)
 }
 
 type eth struct {
@@ -117,33 +117,36 @@ func (ks *eth) Add(key ethkey.KeyV2, chainID *big.Int) error {
 	return nil
 }
 
-func (ks *eth) EnsureKeys(chainID *big.Int) (
-	sendingKey ethkey.KeyV2,
-	sendDidExist bool,
-	fundingKey ethkey.KeyV2,
-	fundDidExist bool,
-	err error,
-) {
+// EnsureKeys verifies whether the ETH keys have been seeded, if not, it creates them.
+func (ks *eth) EnsureKeys(chainID *big.Int) (err error) {
 	ks.lock.Lock()
 	defer ks.lock.Unlock()
 	if ks.isLocked() {
-		return ethkey.KeyV2{}, false, ethkey.KeyV2{}, false, ErrLocked
+		return ErrLocked
 	}
+
+	var sendDidExist bool
+	var fundDidExist bool
+	var sendingKey ethkey.KeyV2
+	var fundingKey ethkey.KeyV2
+
 	// check & setup sending key
-	sendingKeys := ks.sendingKeys()
+	sendingKeys := ks.sendingKeys(chainID)
 	if len(sendingKeys) > 0 {
 		sendingKey = sendingKeys[0]
 		sendDidExist = true
 	} else {
 		sendingKey, err = ethkey.NewV2()
 		if err != nil {
-			return ethkey.KeyV2{}, false, ethkey.KeyV2{}, false, err
+			return err
 		}
 		err = ks.addEthKeyWithState(sendingKey, ethkey.State{EVMChainID: *utils.NewBig(chainID), IsFunding: false})
 		if err != nil {
-			return ethkey.KeyV2{}, false, ethkey.KeyV2{}, false, err
+			return err
 		}
+		ks.logger.Infow("New sending address created", "address", sendingKey.Address.Hex(), "evmChainID", chainID)
 	}
+
 	// check & setup funding key
 	fundingKeys := ks.fundingKeys()
 	if len(fundingKeys) > 0 {
@@ -152,17 +155,20 @@ func (ks *eth) EnsureKeys(chainID *big.Int) (
 	} else {
 		fundingKey, err = ethkey.NewV2()
 		if err != nil {
-			return ethkey.KeyV2{}, false, ethkey.KeyV2{}, false, err
+			return err
 		}
 		err = ks.addEthKeyWithState(fundingKey, ethkey.State{EVMChainID: *utils.NewBig(chainID), IsFunding: true})
 		if err != nil {
-			return ethkey.KeyV2{}, false, ethkey.KeyV2{}, false, err
+			return err
 		}
+		ks.logger.Infow("New funding address created", "address", fundingKey.Address.Hex(), "evmChainID", chainID)
 	}
+
 	if !sendDidExist || !fundDidExist {
 		ks.notify()
 	}
-	return sendingKey, sendDidExist, fundingKey, fundDidExist, nil
+
+	return nil
 }
 
 func (ks *eth) Import(keyJSON []byte, password string, chainID *big.Int) (ethkey.KeyV2, error) {
@@ -252,13 +258,15 @@ func (ks *eth) SignTx(address common.Address, tx *types.Transaction, chainID *bi
 	return types.SignTx(tx, signer, key.ToEcdsaPrivKey())
 }
 
-func (ks *eth) SendingKeys() (sendingKeys []ethkey.KeyV2, err error) {
+// SendingKeys returns all sending keys for the given chain
+// If chainID is nil, returns all sending keys for all chains
+func (ks *eth) SendingKeys(chainID *big.Int) (sendingKeys []ethkey.KeyV2, err error) {
 	ks.lock.RLock()
 	defer ks.lock.RUnlock()
 	if ks.isLocked() {
 		return nil, ErrLocked
 	}
-	return ks.sendingKeys(), nil
+	return ks.sendingKeys(chainID), nil
 }
 
 func (ks *eth) FundingKeys() (fundingKeys []ethkey.KeyV2, err error) {
@@ -270,7 +278,7 @@ func (ks *eth) FundingKeys() (fundingKeys []ethkey.KeyV2, err error) {
 	return ks.fundingKeys(), nil
 }
 
-func (ks *eth) GetRoundRobinAddress(whitelist ...common.Address) (common.Address, error) {
+func (ks *eth) GetRoundRobinAddress(chainID *big.Int, whitelist ...common.Address) (common.Address, error) {
 	ks.lock.Lock()
 	defer ks.lock.Unlock()
 	if ks.isLocked() {
@@ -279,9 +287,9 @@ func (ks *eth) GetRoundRobinAddress(whitelist ...common.Address) (common.Address
 
 	var keys []ethkey.KeyV2
 	if len(whitelist) == 0 {
-		keys = ks.sendingKeys()
+		keys = ks.sendingKeys(chainID)
 	} else if len(whitelist) > 0 {
-		for _, k := range ks.sendingKeys() {
+		for _, k := range ks.sendingKeys(chainID) {
 			for _, addr := range whitelist {
 				if addr == k.Address.Address() {
 					keys = append(keys, k)
@@ -291,7 +299,17 @@ func (ks *eth) GetRoundRobinAddress(whitelist ...common.Address) (common.Address
 	}
 
 	if len(keys) == 0 {
-		return common.Address{}, errors.New("no keys available")
+		var err error
+		if chainID == nil && len(whitelist) == 0 {
+			err = errors.New("no sending keys available")
+		} else if chainID == nil {
+			err = errors.Errorf("no sending keys available that match whitelist: %v", whitelist)
+		} else if len(whitelist) == 0 {
+			err = errors.Errorf("no sending keys available for chain %s", chainID.String())
+		} else {
+			err = errors.Errorf("no sending keys available for chain %s that match whitelist: %v", chainID.String(), whitelist)
+		}
+		return common.Address{}, err
 	}
 
 	sort.SliceStable(keys, func(i, j int) bool {
@@ -359,15 +377,31 @@ func (ks *eth) GetStatesForChain(chainID *big.Int) (states []ethkey.State, err e
 	return
 }
 
-func (ks *eth) GetV1KeysAsV2(chainID *big.Int) (keys []ethkey.KeyV2, states []ethkey.State, _ error) {
+func (ks *eth) GetV1KeysAsV2(f DefaultEVMChainIDFunc) (keys []ethkey.KeyV2, states []ethkey.State, _ error) {
 	v1Keys, err := ks.orm.GetEncryptedV1EthKeys()
 	if err != nil {
-		return keys, states, errors.Wrap(err, "failed to get encrypted v1 eth keys")
+		return nil, nil, errors.Wrap(err, "failed to get encrypted v1 eth keys")
+	}
+	if len(v1Keys) == 0 {
+		return keys, states, nil
+	}
+	chainID, err := f()
+	if err != nil {
+		return nil, nil, errors.Wrapf(err, `%d legacy eth keys detected, but no default EVM chain ID was specified
+
+PLEASE READ THIS ADDITIONAL INFO
+
+If you are running Chainlink with EVM_ENABLED=false and don't care about EVM keys at all, you can run the following SQL to remove any lingering eth keys that may have been autogenerated by an older version of Chainlink, and boot the node again:
+
+pqsl> TRUNCATE keys;
+
+WARNING: This will PERMANENTLY AND IRRECOVERABLY delete any legacy eth keys, so please be absolutely sure this is what you want before you run this. Consider taking a database backup first.
+`, len(v1Keys))
 	}
 	for _, keyV1 := range v1Keys {
 		dKey, err := keystore.DecryptKey(keyV1.JSON, ks.password)
 		if err != nil {
-			return keys, states, errors.Wrapf(err, "could not decrypt eth key %s", keyV1.Address.Hex())
+			return nil, nil, errors.Wrapf(err, "could not decrypt eth key %s", keyV1.Address.Hex())
 		}
 		keyV2 := ethkey.FromPrivateKey(dKey.PrivateKey)
 		keys = append(keys, keyV2)
@@ -403,9 +437,11 @@ func (ks *eth) fundingKeys() (fundingKeys []ethkey.KeyV2) {
 }
 
 // caller must hold lock!
-func (ks *eth) sendingKeys() (sendingKeys []ethkey.KeyV2) {
+// if chainID is nil, returns keys for all chains
+func (ks *eth) sendingKeys(chainID *big.Int) (sendingKeys []ethkey.KeyV2) {
 	for _, k := range ks.keyRing.Eth {
-		if !ks.keyStates.Eth[k.ID()].IsFunding {
+		state := ks.keyStates.Eth[k.ID()]
+		if !state.IsFunding && (chainID == nil || (((*big.Int)(&state.EVMChainID)).Cmp(chainID) == 0)) {
 			sendingKeys = append(sendingKeys, k)
 		}
 	}

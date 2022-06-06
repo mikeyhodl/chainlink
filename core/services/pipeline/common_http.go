@@ -11,6 +11,7 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/smartcontractkit/chainlink/core/logger"
+	clhttp "github.com/smartcontractkit/chainlink/core/utils/http"
 )
 
 func makeHTTPRequest(
@@ -18,9 +19,10 @@ func makeHTTPRequest(
 	lggr logger.Logger,
 	method StringParam,
 	url URLParam,
+	reqHeaders []string,
 	requestData MapParam,
-	allowUnrestrictedNetworkAccess BoolParam,
-	cfg Config,
+	client *http.Client,
+	httpLimit int64,
 ) ([]byte, int, http.Header, time.Duration, error) {
 
 	var bodyReader io.Reader
@@ -32,26 +34,27 @@ func makeHTTPRequest(
 		bodyReader = bytes.NewReader(bodyBytes)
 	}
 
-	timeoutCtx, cancel := context.WithTimeout(ctx, cfg.DefaultHTTPTimeout().Duration())
-	defer cancel()
-
-	request, err := http.NewRequestWithContext(timeoutCtx, string(method), url.String(), bodyReader)
+	request, err := http.NewRequestWithContext(ctx, string(method), url.String(), bodyReader)
 	if err != nil {
 		return nil, 0, nil, 0, errors.Wrap(err, "failed to create http.Request")
 	}
 	request.Header.Set("Content-Type", "application/json")
+	if len(reqHeaders)%2 != 0 {
+		panic("headers must have an even number of elements")
+	}
+	for i := 0; i+1 < len(reqHeaders); i += 2 {
+		request.Header.Set(reqHeaders[i], reqHeaders[i+1])
+	}
 
-	httpRequest := HTTPRequest{
+	httpRequest := clhttp.HTTPRequest{
+		Client:  client,
 		Request: request,
-		Config: HTTPRequestConfig{
-			SizeLimit:                      cfg.DefaultHTTPLimit(),
-			AllowUnrestrictedNetworkAccess: bool(allowUnrestrictedNetworkAccess),
-		},
-		Logger: lggr.Named("HTTPRequest"),
+		Config:  clhttp.HTTPRequestConfig{SizeLimit: httpLimit},
+		Logger:  lggr.Named("HTTPRequest"),
 	}
 
 	start := time.Now()
-	responseBytes, statusCode, headers, err := httpRequest.SendRequest()
+	responseBytes, statusCode, respHeaders, err := httpRequest.SendRequest()
 	if ctx.Err() != nil {
 		return nil, 0, nil, 0, errors.New("http request timed out or interrupted")
 	}
@@ -62,9 +65,9 @@ func makeHTTPRequest(
 
 	if statusCode >= 400 {
 		maybeErr := bestEffortExtractError(responseBytes)
-		return nil, statusCode, headers, 0, errors.Errorf("got error from %s: (status code %v) %s", url.String(), statusCode, maybeErr)
+		return nil, statusCode, respHeaders, 0, errors.Errorf("got error from %s: (status code %v) %s", url.String(), statusCode, maybeErr)
 	}
-	return responseBytes, statusCode, headers, elapsed, nil
+	return responseBytes, statusCode, respHeaders, elapsed, nil
 }
 
 type PossibleErrorResponses struct {
@@ -84,4 +87,21 @@ func bestEffortExtractError(responseBytes []byte) string {
 		return resp.ErrorMessage
 	}
 	return string(responseBytes)
+}
+
+func httpRequestCtx(ctx context.Context, t Task, cfg Config) (requestCtx context.Context, cancel context.CancelFunc) {
+	// Only set the default timeout if the task timeout is missing; task
+	// timeout if present will have already been set on the context at a higher
+	// level. If task timeout is explicitly set to zero, we must not override
+	// with the default http timeout here (since it has been explicitly
+	// disabled).
+	//
+	// DefaultHTTPTimeout is not used if set to 0.
+	if _, isSet := t.TaskTimeout(); !isSet && cfg.DefaultHTTPTimeout().Duration() > 0 {
+		requestCtx, cancel = context.WithTimeout(ctx, cfg.DefaultHTTPTimeout().Duration())
+	} else {
+		requestCtx = ctx
+		cancel = func() {}
+	}
+	return
 }

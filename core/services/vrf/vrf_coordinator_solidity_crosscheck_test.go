@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/smartcontractkit/chainlink/core/assets"
+	"github.com/smartcontractkit/chainlink/core/internal/gethwrappers/generated/blockhash_store"
 	proof2 "github.com/smartcontractkit/chainlink/core/services/vrf/proof"
 
 	"github.com/smartcontractkit/chainlink/core/internal/gethwrappers/generated/solidity_vrf_consumer_interface_v08"
@@ -42,6 +43,7 @@ type coordinatorUniverse struct {
 	// Golang wrappers ofr solidity contracts
 	rootContract               *solidity_vrf_coordinator_interface.VRFCoordinator
 	linkContract               *link_token_interface.LinkToken
+	bhsContract                *blockhash_store.BlockhashStore
 	consumerContract           *solidity_vrf_consumer_interface.VRFConsumer
 	requestIDBase              *solidity_vrf_request_id.VRFRequestIDBaseTestHelper
 	consumerContractV08        *solidity_vrf_consumer_interface_v08.VRFConsumer
@@ -50,6 +52,8 @@ type coordinatorUniverse struct {
 	consumerContractAddress    common.Address
 	consumerContractAddressV08 common.Address
 	linkContractAddress        common.Address
+	bhsContractAddress         common.Address
+
 	// Abstraction representation of the ethereum blockchain
 	backend        *backends.SimulatedBackend
 	coordinatorABI *abi.ABI
@@ -91,22 +95,29 @@ func newVRFCoordinatorUniverseWithV08Consumer(t *testing.T, key ethkey.KeyV2) co
 
 // newVRFCoordinatorUniverse sets up all identities and contracts associated with
 // testing the solidity VRF contracts involved in randomness request workflow
-func newVRFCoordinatorUniverse(t *testing.T, key ethkey.KeyV2) coordinatorUniverse {
-	oracleTransactor := cltest.MustNewSimulatedBackendKeyedTransactor(t, key.ToEcdsaPrivKey())
+func newVRFCoordinatorUniverse(t *testing.T, keys ...ethkey.KeyV2) coordinatorUniverse {
+	var oracleTransactors []*bind.TransactOpts
+	for _, key := range keys {
+		oracleTransactors = append(oracleTransactors, cltest.MustNewSimulatedBackendKeyedTransactor(t, key.ToEcdsaPrivKey()))
+	}
+
 	var (
-		sergey  = newIdentity(t)
-		neil    = newIdentity(t)
-		ned     = newIdentity(t)
-		carol   = newIdentity(t)
-		nallory = oracleTransactor
+		sergey = newIdentity(t)
+		neil   = newIdentity(t)
+		ned    = newIdentity(t)
+		carol  = newIdentity(t)
 	)
 	genesisData := core.GenesisAlloc{
-		sergey.From:  {Balance: assets.Ether(1000)},
-		neil.From:    {Balance: assets.Ether(1000)},
-		ned.From:     {Balance: assets.Ether(1000)},
-		carol.From:   {Balance: assets.Ether(1000)},
-		nallory.From: {Balance: assets.Ether(1000)},
+		sergey.From: {Balance: assets.Ether(1000)},
+		neil.From:   {Balance: assets.Ether(1000)},
+		ned.From:    {Balance: assets.Ether(1000)},
+		carol.From:  {Balance: assets.Ether(1000)},
 	}
+
+	for _, t := range oracleTransactors {
+		genesisData[t.From] = core.GenesisAccount{Balance: assets.Ether(1000)}
+	}
+
 	gasLimit := ethconfig.Defaults.Miner.GasCeil
 	consumerABI, err := abi.JSON(strings.NewReader(
 		solidity_vrf_consumer_interface.VRFConsumerABI))
@@ -118,9 +129,11 @@ func newVRFCoordinatorUniverse(t *testing.T, key ethkey.KeyV2) coordinatorUniver
 	linkAddress, _, linkContract, err := link_token_interface.DeployLinkToken(
 		sergey, backend)
 	require.NoError(t, err, "failed to deploy link contract to simulated ethereum blockchain")
+	bhsAddress, _, bhsContract, err := blockhash_store.DeployBlockhashStore(neil, backend)
+	require.NoError(t, err, "failed to deploy BlockhashStore contract to simulated ethereum blockchain")
 	coordinatorAddress, _, coordinatorContract, err :=
 		solidity_vrf_coordinator_interface.DeployVRFCoordinator(
-			neil, backend, linkAddress, common.Address{} /* BlockHashStore address */)
+			neil, backend, linkAddress, bhsAddress)
 	require.NoError(t, err, "failed to deploy VRFCoordinator contract to simulated ethereum blockchain")
 	consumerContractAddress, _, consumerContract, err :=
 		solidity_vrf_consumer_interface.DeployVRFConsumer(
@@ -137,6 +150,8 @@ func newVRFCoordinatorUniverse(t *testing.T, key ethkey.KeyV2) coordinatorUniver
 		rootContractAddress:     coordinatorAddress,
 		linkContract:            linkContract,
 		linkContractAddress:     linkAddress,
+		bhsContract:             bhsContract,
+		bhsContractAddress:      bhsAddress,
 		consumerContract:        consumerContract,
 		requestIDBase:           requestIDBase,
 		consumerContractAddress: consumerContractAddress,
@@ -322,7 +337,7 @@ func fulfillRandomnessRequest(t *testing.T, coordinator coordinatorUniverse, log
 	seed := proof2.FinalSeed(s)
 	proof, err := secretKey.GenerateProofWithNonce(seed, big.NewInt(1) /* nonce */)
 	require.NoError(t, err)
-	proofBlob, err := vrf.GenerateProofResponseFromProof(proof, s)
+	proofBlob, err := GenerateProofResponseFromProof(proof, s)
 	require.NoError(t, err, "could not generate VRF proof!")
 	// Seems to be a bug in the simulated backend: without this extra Commit, the
 	// EVM seems to think it's still on the block in which the request was made,

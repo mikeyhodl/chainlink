@@ -10,12 +10,13 @@ import (
 	gethcommon "github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/pkg/errors"
-	ocr "github.com/smartcontractkit/libocr/offchainreporting"
-	ocrtypes "github.com/smartcontractkit/libocr/offchainreporting/types"
 	"go.uber.org/multierr"
 
+	ocr "github.com/smartcontractkit/libocr/offchainreporting"
+	ocrtypes "github.com/smartcontractkit/libocr/offchainreporting/types"
+
 	"github.com/smartcontractkit/chainlink/core/assets"
-	"github.com/smartcontractkit/chainlink/core/chains"
+	evmclient "github.com/smartcontractkit/chainlink/core/chains/evm/client"
 	evmtypes "github.com/smartcontractkit/chainlink/core/chains/evm/types"
 	"github.com/smartcontractkit/chainlink/core/config"
 	"github.com/smartcontractkit/chainlink/core/config/envvar"
@@ -25,24 +26,26 @@ import (
 )
 
 type ChainScopedOnlyConfig interface {
+	evmclient.NodeConfig
+
 	BalanceMonitorEnabled() bool
 	BlockEmissionIdleWarningThreshold() time.Duration
 	BlockHistoryEstimatorBatchSize() (size uint32)
 	BlockHistoryEstimatorBlockDelay() uint16
 	BlockHistoryEstimatorBlockHistorySize() uint16
+	BlockHistoryEstimatorEIP1559FeeCapBufferBlocks() uint16
 	BlockHistoryEstimatorTransactionPercentile() uint16
 	ChainID() *big.Int
 	EvmEIP1559DynamicFees() bool
 	EthTxReaperInterval() time.Duration
 	EthTxReaperThreshold() time.Duration
 	EthTxResendAfterThreshold() time.Duration
-	EvmDefaultBatchSize() uint32
 	EvmFinalityDepth() uint32
 	EvmGasBumpPercent() uint16
 	EvmGasBumpThreshold() uint64
 	EvmGasBumpTxDepth() uint16
 	EvmGasBumpWei() *big.Int
-	EvmGasFeeCap() *big.Int
+	EvmGasFeeCapDefault() *big.Int
 	EvmGasLimitDefault() uint64
 	EvmGasLimitMultiplier() float32
 	EvmGasLimitTransfer() uint64
@@ -53,20 +56,23 @@ type ChainScopedOnlyConfig interface {
 	EvmHeadTrackerMaxBufferSize() uint32
 	EvmHeadTrackerSamplingInterval() time.Duration
 	EvmLogBackfillBatchSize() uint32
+	EvmLogPollInterval() time.Duration
 	EvmMaxGasPriceWei() *big.Int
 	EvmMaxInFlightTransactions() uint32
 	EvmMaxQueuedTransactions() uint64
 	EvmMinGasPriceWei() *big.Int
 	EvmNonceAutoSync() bool
+	EvmUseForwarders() bool
 	EvmRPCDefaultBatchSize() uint32
 	FlagsContractAddress() string
 	GasEstimatorMode() string
-	ChainType() chains.ChainType
+	ChainType() config.ChainType
 	KeySpecificMaxGasPriceWei(addr gethcommon.Address) *big.Int
 	LinkContractAddress() string
+	OperatorFactoryAddress() string
 	MinIncomingConfirmations() uint32
-	MinRequiredOutgoingConfirmations() uint64
 	MinimumContractPayment() *assets.Link
+	NodeNoNewHeadsThreshold() time.Duration
 
 	// OCR2 chain specific config
 	OCR2ContractConfirmations() uint16
@@ -86,7 +92,7 @@ type ChainScopedConfig interface {
 	ChainScopedOnlyConfig
 	Validate() error
 	// Both Configure() and PersistedConfig() should be accessed through ChainSet methods only.
-	Configure(config evmtypes.ChainCfg) error
+	Configure(config evmtypes.ChainCfg)
 	PersistedConfig() evmtypes.ChainCfg
 }
 
@@ -109,7 +115,7 @@ type chainScopedConfig struct {
 }
 
 func NewChainScopedConfig(chainID *big.Int, cfg evmtypes.ChainCfg, orm evmtypes.ChainConfigORM, lggr logger.Logger, gcfg config.GeneralConfig) ChainScopedConfig {
-	csorm := &chainScopedConfigORM{chainID, orm}
+	csorm := &chainScopedConfigORM{*utils.NewBig(chainID), orm}
 	defaultSet, exists := chainSpecificConfigDefaultSets[chainID.Int64()]
 	if !exists {
 		lggr.Warnf("Unrecognised chain %d, falling back to generic default configuration", chainID)
@@ -123,7 +129,7 @@ func NewChainScopedConfig(chainID *big.Int, cfg evmtypes.ChainCfg, orm evmtypes.
 		id:            chainID,
 		knownID:       exists,
 		onceMap:       make(map[string]struct{})}
-	_ = css.Configure(cfg)
+	css.Configure(cfg)
 	return &css
 }
 
@@ -134,11 +140,11 @@ func (c *chainScopedConfig) Validate() (err error) {
 	)
 }
 
-func (c *chainScopedConfig) Configure(config evmtypes.ChainCfg) (err error) {
+func (c *chainScopedConfig) Configure(config evmtypes.ChainCfg) {
 	c.persistMu.Lock()
 	defer c.persistMu.Unlock()
 	c.persistedCfg = config
-	return nil
+	return
 }
 
 func (c *chainScopedConfig) PersistedConfig() evmtypes.ChainCfg {
@@ -159,6 +165,15 @@ func (c *chainScopedConfig) validate() (err error) {
 
 	if uint32(c.EvmGasBumpTxDepth()) > c.EvmMaxInFlightTransactions() {
 		err = multierr.Combine(err, errors.New("ETH_GAS_BUMP_TX_DEPTH must be less than or equal to ETH_MAX_IN_FLIGHT_TRANSACTIONS"))
+	}
+	if c.EvmGasTipCapDefault().Cmp(c.EvmGasTipCapMinimum()) < 0 {
+		err = multierr.Combine(err, errors.Errorf("EVM_GAS_TIP_CAP_DEFAULT (%s) must be greater than or equal to EVM_GAS_TIP_CAP_MINIMUM (%s)", c.EvmGasTipCapDefault(), c.EvmGasTipCapMinimum()))
+	}
+	if c.EvmGasFeeCapDefault().Cmp(c.EvmGasTipCapDefault()) < 0 {
+		err = multierr.Combine(err, errors.Errorf("EVM_GAS_FEE_CAP_DEFAULT (%s) must be greater than or equal to EVM_GAS_TIP_CAP_DEFAULT (%s)", c.EvmGasFeeCapDefault(), c.EvmGasTipCapDefault()))
+	}
+	if c.EvmGasFeeCapDefault().Cmp(c.EvmMaxGasPriceWei()) > 0 {
+		err = multierr.Combine(err, errors.Errorf("EVM_GAS_FEE_CAP_DEFAULT (%s) must be less than or equal to ETH_MAX_GAS_PRICE_WEI (%s)", c.EvmGasFeeCapDefault(), c.EvmMaxGasPriceWei()))
 	}
 	if c.EvmMinGasPriceWei().Cmp(c.EvmGasPriceDefault()) > 0 {
 		err = multierr.Combine(err, errors.New("ETH_MIN_GAS_PRICE_WEI must be less than or equal to ETH_GAS_PRICE_DEFAULT"))
@@ -199,22 +214,24 @@ func (c *chainScopedConfig) validate() (err error) {
 		err = multierr.Combine(err, errors.Errorf("CHAIN_TYPE %q cannot be used with chain ID %d", chainType, c.ChainID()))
 	} else {
 		switch chainType {
-		case chains.Arbitrum:
+		case config.ChainArbitrum:
 			if gasEst := c.GasEstimatorMode(); gasEst != "FixedPrice" {
 				err = multierr.Combine(err, errors.Errorf("GAS_ESTIMATOR_MODE %q is not allowed with chain type %q - "+
-					"must be %q", gasEst, chains.Arbitrum, "FixedPrice"))
+					"must be %q", gasEst, config.ChainArbitrum, "FixedPrice"))
 			}
-		case chains.ExChain:
 
-		case chains.Optimism:
+		case config.ChainOptimism, config.ChainMetis:
 			gasEst := c.GasEstimatorMode()
 			switch gasEst {
-			case "Optimism", "Optimism2":
+			case "Optimism2", "L2Suggested":
+				// valid
+			case "Optimism":
+				err = multierr.Combine(err, errors.Errorf("GAS_ESTIMATOR_MODE %q is no longer supported since OVM 1.0 was discontinued - use %q", "Optimism", "L2Suggested"))
 			default:
 				err = multierr.Combine(err, errors.Errorf("GAS_ESTIMATOR_MODE %q is not allowed with chain type %q - "+
-					"must be %q or %q", gasEst, chains.Optimism, "Optimism", "Optimism2"))
+					"must be %q (or the equivalent, deprecated %q)", gasEst, chainType, "L2Suggested", "Optimism2"))
 			}
-		case chains.XDai:
+		case config.ChainXDai:
 
 		}
 	}
@@ -239,7 +256,7 @@ func (c *chainScopedConfig) logEnvOverrideOnce(name string, envVal interface{}) 
 	if _, ok := c.onceMap[k]; ok {
 		return
 	}
-	c.logger.Warnf("Global ENV var set %s=%v, overriding all other values for %s", envvar.TryName(name), envVal, name)
+	c.logger.Warnf("Global ENV var set %s=%v, overriding all non key-specific values for %s", envvar.TryName(name), envVal, name)
 	c.onceMap[k] = struct{}{}
 }
 
@@ -352,7 +369,7 @@ func (c *chainScopedConfig) EvmMaxGasPriceWei() *big.Int {
 func (c *chainScopedConfig) EvmMaxQueuedTransactions() uint64 {
 	val, ok := c.GeneralConfig.GlobalEvmMaxQueuedTransactions()
 	if ok {
-		c.logEnvOverrideOnce("EvmMaxGasPriceWei", val)
+		c.logEnvOverrideOnce("EvmMaxQueuedTransactions", val)
 		return val
 	}
 	return c.defaultSet.maxQueuedTransactions
@@ -554,11 +571,11 @@ func (c *chainScopedConfig) BlockHistoryEstimatorBatchSize() (size uint32) {
 		c.logEnvOverrideOnce("BlockHistoryEstimatorBatchSize", val)
 		size = val
 	} else {
-		valLegacy, set := c.lookupEnv("GAS_UPDATER_BATCH_SIZE", parse.Uint32)
+		valLegacy, set := lookupEnv(c, "GAS_UPDATER_BATCH_SIZE", parse.Uint32)
 		if set {
 			c.logEnvOverrideOnce("GAS_UPDATER_BATCH_SIZE", valLegacy)
-			c.logger.Warn("GAS_UPDATER_BATCH_SIZE is deprecated, please use BLOCK_HISTORY_ESTIMATOR_BATCH_SIZE instead (or simply remove to use the default)")
-			size = valLegacy.(uint32)
+			c.logger.Error("GAS_UPDATER_BATCH_SIZE is deprecated, please use BLOCK_HISTORY_ESTIMATOR_BATCH_SIZE instead (or simply remove to use the default)")
+			size = valLegacy
 		} else {
 			size = c.defaultSet.blockHistoryEstimatorBatchSize
 		}
@@ -567,7 +584,7 @@ func (c *chainScopedConfig) BlockHistoryEstimatorBatchSize() (size uint32) {
 	if size > 0 {
 		return size
 	}
-	return c.EvmDefaultBatchSize()
+	return c.EvmRPCDefaultBatchSize()
 }
 
 // BlockHistoryEstimatorBlockDelay is the number of blocks that the block history estimator trails behind head.
@@ -583,12 +600,12 @@ func (c *chainScopedConfig) BlockHistoryEstimatorBlockDelay() uint16 {
 		c.logEnvOverrideOnce("BlockHistoryEstimatorBlockDelay", val)
 		return val
 	}
-	valLegacy, set := c.lookupEnv("GAS_UPDATER_BLOCK_DELAY", parse.Uint16)
+	valLegacy, set := lookupEnv(c, "GAS_UPDATER_BLOCK_DELAY", parse.Uint16)
 
 	if set {
 		c.logEnvOverrideOnce("GAS_UPDATER_BLOCK_DELAY", valLegacy)
-		c.logger.Warn("GAS_UPDATER_BLOCK_DELAY is deprecated, please use BLOCK_HISTORY_ESTIMATOR_BLOCK_DELAY instead (or simply remove to use the default)")
-		return valLegacy.(uint16)
+		c.logger.Error("GAS_UPDATER_BLOCK_DELAY is deprecated, please use BLOCK_HISTORY_ESTIMATOR_BLOCK_DELAY instead (or simply remove to use the default)")
+		return valLegacy
 	}
 	c.persistMu.RLock()
 	p := c.persistedCfg.BlockHistoryEstimatorBlockDelay
@@ -608,11 +625,11 @@ func (c *chainScopedConfig) BlockHistoryEstimatorBlockHistorySize() uint16 {
 		c.logEnvOverrideOnce("BlockHistoryEstimatorBlockHistorySize", val)
 		return val
 	}
-	valLegacy, set := c.lookupEnv("GAS_UPDATER_BLOCK_HISTORY_SIZE", parse.Uint16)
+	valLegacy, set := lookupEnv(c, "GAS_UPDATER_BLOCK_HISTORY_SIZE", parse.Uint16)
 	if set {
 		c.logEnvOverrideOnce("GAS_UPDATER_BLOCK_HISTORY_SIZE", valLegacy)
-		c.logger.Warn("GAS_UPDATER_BLOCK_HISTORY_SIZE is deprecated, please use BLOCK_HISTORY_ESTIMATOR_BLOCK_HISTORY_SIZE instead (or simply remove to use the default)")
-		return valLegacy.(uint16)
+		c.logger.Error("GAS_UPDATER_BLOCK_HISTORY_SIZE is deprecated, please use BLOCK_HISTORY_ESTIMATOR_BLOCK_HISTORY_SIZE instead (or simply remove to use the default)")
+		return valLegacy
 	}
 	c.persistMu.RLock()
 	p := c.persistedCfg.BlockHistoryEstimatorBlockHistorySize
@@ -624,6 +641,26 @@ func (c *chainScopedConfig) BlockHistoryEstimatorBlockHistorySize() uint16 {
 	return c.defaultSet.blockHistoryEstimatorBlockHistorySize
 }
 
+func (c *chainScopedConfig) BlockHistoryEstimatorEIP1559FeeCapBufferBlocks() uint16 {
+	val, ok := c.GeneralConfig.GlobalBlockHistoryEstimatorEIP1559FeeCapBufferBlocks()
+	if ok {
+		c.logEnvOverrideOnce("BlockHistoryEstimatorEIP1559FeeCapBufferBlocks", val)
+		return val
+	}
+	c.persistMu.RLock()
+	p := c.persistedCfg.BlockHistoryEstimatorEIP1559FeeCapBufferBlocks
+	c.persistMu.RUnlock()
+	if p.Valid {
+		c.logPersistedOverrideOnce("BlockHistoryEstimatorEIP1559FeeCapBufferBlocks", p.Int64)
+		return uint16(p.Int64)
+	}
+	if c.defaultSet.blockHistoryEstimatorEIP1559FeeCapBufferBlocks != nil {
+		return *c.defaultSet.blockHistoryEstimatorEIP1559FeeCapBufferBlocks
+	}
+	// Default is the gas bump threshold + 1 block
+	return uint16(c.EvmGasBumpThreshold() + 1)
+}
+
 // BlockHistoryEstimatorTransactionPercentile is the percentile gas price to choose. E.g.
 // if the past transaction history contains four transactions with gas prices:
 // [100, 200, 300, 400], picking 25 for this number will give a value of 200
@@ -633,11 +670,11 @@ func (c *chainScopedConfig) BlockHistoryEstimatorTransactionPercentile() uint16 
 		c.logEnvOverrideOnce("BlockHistoryEstimatorTransactionPercentile", val)
 		return val
 	}
-	valLegacy, set := c.lookupEnv("GAS_UPDATER_TRANSACTION_PERCENTILE", parse.Uint16)
+	valLegacy, set := lookupEnv(c, "GAS_UPDATER_TRANSACTION_PERCENTILE", parse.Uint16)
 	if set {
 		c.logEnvOverrideOnce("GAS_UPDATER_TRANSACTION_PERCENTILE", valLegacy)
-		c.logger.Warn("GAS_UPDATER_TRANSACTION_PERCENTILE is deprecated, please use BLOCK_HISTORY_ESTIMATOR_PERCENTILE instead (or simply remove to use the default)")
-		return valLegacy.(uint16)
+		c.logger.Error("GAS_UPDATER_TRANSACTION_PERCENTILE is deprecated, please use BLOCK_HISTORY_ESTIMATOR_TRANSACTION_PERCENTILE instead (or simply remove to use the default)")
+		return valLegacy
 	}
 	return c.defaultSet.blockHistoryEstimatorTransactionPercentile
 }
@@ -649,14 +686,14 @@ func (c *chainScopedConfig) GasEstimatorMode() string {
 		c.logEnvOverrideOnce("GasEstimatorMode", val)
 		return val
 	}
-	enabled, set := c.lookupEnv("GAS_UPDATER_ENABLED", parse.Bool)
+	enabled, set := lookupEnv(c, "GAS_UPDATER_ENABLED", parse.Bool)
 	if set {
 		c.logEnvOverrideOnce("GAS_UPDATER_ENABLED", enabled)
 		if enabled.(bool) {
-			c.logger.Warn("GAS_UPDATER_ENABLED has been deprecated, to enable the block history estimator, please use GAS_ESTIMATOR_MODE=BlockHistory instead (or simply remove to use the default)")
+			c.logger.Error("GAS_UPDATER_ENABLED has been deprecated, to enable the block history estimator, please use GAS_ESTIMATOR_MODE=BlockHistory instead (or simply remove to use the default)")
 			return "BlockHistory"
 		}
-		c.logger.Warn("GAS_UPDATER_ENABLED has been deprecated, to disable the block history estimator, please use GAS_ESTIMATOR_MODE=FixedPrice instead (or simply remove to use the default)")
+		c.logger.Error("GAS_UPDATER_ENABLED has been deprecated, to disable the block history estimator, please use GAS_ESTIMATOR_MODE=FixedPrice instead (or simply remove to use the default)")
 		return "FixedPrice"
 	}
 	c.persistMu.RLock()
@@ -670,33 +707,30 @@ func (c *chainScopedConfig) GasEstimatorMode() string {
 }
 
 func (c *chainScopedConfig) KeySpecificMaxGasPriceWei(addr gethcommon.Address) *big.Int {
-	val, ok := c.GeneralConfig.GlobalEvmMaxGasPriceWei()
-	if ok {
-		c.logEnvOverrideOnce("EvmMaxGasPriceWei", val)
-		return val
-	}
 	c.persistMu.RLock()
 	keySpecific := c.persistedCfg.KeySpecific[addr.Hex()].EvmMaxGasPriceWei
 	c.persistMu.RUnlock()
-	if keySpecific != nil && !keySpecific.Equal(utils.NewBigI(0)) {
+
+	chainSpecific := utils.NewBig(c.EvmMaxGasPriceWei())
+	if keySpecific != nil && !keySpecific.Equal(utils.NewBigI(0)) && keySpecific.Cmp(chainSpecific) < 0 {
 		c.logKeySpecificOverrideOnce("EvmMaxGasPriceWei", addr, keySpecific)
 		return keySpecific.ToInt()
 	}
 	return c.EvmMaxGasPriceWei()
 }
 
-func (c *chainScopedConfig) ChainType() chains.ChainType {
+func (c *chainScopedConfig) ChainType() config.ChainType {
 	val, ok := c.GeneralConfig.GlobalChainType()
 	if ok {
 		c.logEnvOverrideOnce("ChainType", val)
-		return chains.ChainType(val)
+		return config.ChainType(val)
 	}
 	c.persistMu.RLock()
 	p := c.persistedCfg.ChainType
 	c.persistMu.RUnlock()
 	if p.Valid {
 		c.logPersistedOverrideOnce("ChainType", p.String)
-		return chains.ChainType(p.String)
+		return config.ChainType(p.String)
 	}
 	return c.defaultSet.chainType
 }
@@ -708,6 +742,31 @@ func (c *chainScopedConfig) LinkContractAddress() string {
 	if ok {
 		c.logEnvOverrideOnce("LinkContractAddress", val)
 		return val
+	}
+	c.persistMu.RLock()
+	p := c.persistedCfg.LinkContractAddress
+	c.persistMu.RUnlock()
+	if p.Valid {
+		c.logPersistedOverrideOnce("LinkContractAddress", p.String)
+		return p.String
+	}
+	return c.defaultSet.linkContractAddress
+}
+
+// OperatorFactoryAddress represents the address of the official LINK token
+// contract on the current Chain
+func (c *chainScopedConfig) OperatorFactoryAddress() string {
+	val, ok := c.GeneralConfig.GlobalOperatorFactoryAddress()
+	if ok {
+		c.logEnvOverrideOnce("OperatorFactoryAddress", val)
+		return val
+	}
+	c.persistMu.RLock()
+	p := c.persistedCfg.OperatorFactoryAddress
+	c.persistMu.RUnlock()
+	if p.Valid {
+		c.logPersistedOverrideOnce("OperatorFactoryAddress", p.String)
+		return p.String
 	}
 	return c.defaultSet.linkContractAddress
 }
@@ -731,27 +790,6 @@ func (c *chainScopedConfig) MinIncomingConfirmations() uint32 {
 		return uint32(p.Int64)
 	}
 	return c.defaultSet.minIncomingConfirmations
-}
-
-// MinRequiredOutgoingConfirmations represents the default minimum number of block
-// confirmations that need to be recorded on an outgoing ethtx task before the run can move onto the next task.
-// This can be overridden on a per-task basis by setting the `MinRequiredOutgoingConfirmations` parameter.
-// MIN_OUTGOING_CONFIRMATIONS=1 considers a transaction as "done" once it has been mined into one block
-// MIN_OUTGOING_CONFIRMATIONS=0 would consider a transaction as "done" even before it has been mined
-func (c *chainScopedConfig) MinRequiredOutgoingConfirmations() uint64 {
-	val, ok := c.GeneralConfig.GlobalMinRequiredOutgoingConfirmations()
-	if ok {
-		c.logEnvOverrideOnce("MinRequiredOutgoingConfirmations", val)
-		return val
-	}
-	c.persistMu.RLock()
-	p := c.persistedCfg.MinRequiredOutgoingConfirmations
-	c.persistMu.RUnlock()
-	if p.Valid {
-		c.logPersistedOverrideOnce("MinRequiredOutgoingConfirmations", p.Int64)
-		return uint64(p.Int64)
-	}
-	return c.defaultSet.minRequiredOutgoingConfirmations
 }
 
 // MinimumContractPayment represents the minimum amount of LINK that must be
@@ -790,17 +828,6 @@ func (c *chainScopedConfig) EvmGasBumpTxDepth() uint16 {
 	return c.defaultSet.gasBumpTxDepth
 }
 
-// EvmDefaultBatchSize controls the number of receipts fetched in each
-// request in the EthConfirmer
-func (c *chainScopedConfig) EvmDefaultBatchSize() uint32 {
-	val, ok := c.GeneralConfig.GlobalEvmDefaultBatchSize()
-	if ok {
-		c.logEnvOverrideOnce("EvmDefaultBatchSize", val)
-		return val
-	}
-	return c.defaultSet.rpcDefaultBatchSize
-}
-
 // EvmGasBumpPercent is the minimum percentage by which gas is bumped on each transaction attempt
 // Change with care since values below geth's default will fail with "underpriced replacement transaction"
 func (c *chainScopedConfig) EvmGasBumpPercent() uint16 {
@@ -834,6 +861,23 @@ func (c *chainScopedConfig) EvmNonceAutoSync() bool {
 		return p.Bool
 	}
 	return c.defaultSet.nonceAutoSync
+}
+
+// EvmUseForwarders enables/disables sending transactions through forwarder contracts
+func (c *chainScopedConfig) EvmUseForwarders() bool {
+	val, ok := c.GeneralConfig.GlobalEvmUseForwarders()
+	if ok {
+		c.logEnvOverrideOnce("EvmUseForwarders", val)
+		return val
+	}
+	c.persistMu.RLock()
+	p := c.persistedCfg.EvmUseForwarders
+	c.persistMu.RUnlock()
+	if p.Valid {
+		c.logPersistedOverrideOnce("EvmUseForwarders", p.Bool)
+		return p.Bool
+	}
+	return c.defaultSet.useForwarders
 }
 
 // EvmGasLimitMultiplier is a factor by which a transaction's GasLimit is
@@ -911,6 +955,23 @@ func (c *chainScopedConfig) EthTxReaperThreshold() time.Duration {
 		return p.Duration()
 	}
 	return c.defaultSet.ethTxReaperThreshold
+}
+
+// EvmLogPollInterval how fast we poll for new logs.
+func (c *chainScopedConfig) EvmLogPollInterval() time.Duration {
+	val, ok := c.GeneralConfig.GlobalEvmLogPollInterval()
+	if ok {
+		c.logEnvOverrideOnce("EvmLogPollInterval", val)
+		return val
+	}
+	c.persistMu.RLock()
+	p := c.persistedCfg.EvmLogPollInterval
+	c.persistMu.RUnlock()
+	if p != nil {
+		c.logPersistedOverrideOnce("EvmLogPollInterval", *p)
+		return p.Duration()
+	}
+	return c.defaultSet.logPollInterval
 }
 
 // EvmLogBackfillBatchSize sets the batch size for calling FilterLogs when we backfill missing logs
@@ -993,11 +1054,21 @@ func (c *chainScopedConfig) EvmEIP1559DynamicFees() bool {
 	return c.defaultSet.eip1559DynamicFees
 }
 
-// EvmGasFeeCap is the fixed amount to set the fee cap on DynamicFee transactions
-// The recommended way to use it is to set this value to something very large
-// and control prices using the gas tip cap instead
-func (c *chainScopedConfig) EvmGasFeeCap() *big.Int {
-	return c.EvmMaxGasPriceWei()
+// EvmGasFeeCapDefault is the fixed amount to set the fee cap on DynamicFee transactions
+func (c *chainScopedConfig) EvmGasFeeCapDefault() *big.Int {
+	val, ok := c.GeneralConfig.GlobalEvmGasFeeCapDefault()
+	if ok {
+		c.logEnvOverrideOnce("EvmGasFeeCapDefault", val)
+		return val
+	}
+	c.persistMu.RLock()
+	p := c.persistedCfg.EvmGasFeeCapDefault
+	c.persistMu.RUnlock()
+	if p != nil {
+		c.logPersistedOverrideOnce("EvmGasFeeCapDefault", p)
+		return p.ToInt()
+	}
+	return &c.defaultSet.gasFeeCapDefault
 }
 
 // EvmGasTipCapDefault is the default value to use for the gas tip on DynamicFee transactions
@@ -1036,10 +1107,45 @@ func (c *chainScopedConfig) EvmGasTipCapMinimum() *big.Int {
 	return &c.defaultSet.gasTipCapMinimum
 }
 
-func (c *chainScopedConfig) lookupEnv(k string, parse func(string) (interface{}, error)) (interface{}, bool) {
+// NodeNoNewHeadsThreshold controls how long to wait after receiving no new
+// heads before marking the node as out-of-sync
+// Set to zero to disable out-of-sync checking
+func (c *chainScopedConfig) NodeNoNewHeadsThreshold() time.Duration {
+	val, ok := c.GeneralConfig.GlobalNodeNoNewHeadsThreshold()
+	if ok {
+		c.logEnvOverrideOnce("NodeNoNewHeadsThreshold", val)
+		return val
+	}
+	return c.defaultSet.nodeDeadAfterNoNewHeadersThreshold
+}
+
+// NodePollFailureThreshold indicates how many consecutive polls must fail in
+// order to mark a node as unreachable.
+// Set to zero to disable poll checking.
+func (c *chainScopedConfig) NodePollFailureThreshold() uint32 {
+	val, ok := c.GeneralConfig.GlobalNodePollFailureThreshold()
+	if ok {
+		c.logEnvOverrideOnce("NodePollFailureThreshold", val)
+		return val
+	}
+	return c.defaultSet.nodePollFailureThreshold
+}
+
+// NodePollInterval controls how often to poll the node to check for liveness.
+// Set to zero to disable poll checking.
+func (c *chainScopedConfig) NodePollInterval() time.Duration {
+	val, ok := c.GeneralConfig.GlobalNodePollInterval()
+	if ok {
+		c.logEnvOverrideOnce("NodePollInterval", val)
+		return val
+	}
+	return c.defaultSet.nodePollInterval
+}
+
+func lookupEnv[T any](c *chainScopedConfig, k string, parse func(string) (T, error)) (t T, ok bool) {
 	s, ok := os.LookupEnv(k)
 	if !ok {
-		return nil, false
+		return
 	}
 	val, err := parse(s)
 	if err == nil {
@@ -1047,5 +1153,5 @@ func (c *chainScopedConfig) lookupEnv(k string, parse func(string) (interface{},
 	}
 	c.logger.Errorw(fmt.Sprintf("Invalid value provided for %s, falling back to default.", s),
 		"value", s, "key", k, "error", err)
-	return nil, false
+	return
 }

@@ -1,11 +1,11 @@
 package logger
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"os"
 
+	"github.com/pkg/errors"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -14,22 +14,26 @@ var _ Logger = &zapLogger{}
 
 type zapLogger struct {
 	*zap.SugaredLogger
-	config     zap.Config
+	level      zap.AtomicLevel
 	name       string
 	fields     []interface{}
 	callerSkip int
 }
 
-func newZapLogger(cfg zap.Config) (Logger, error) {
-	zl, err := cfg.Build()
-	if err != nil {
-		return nil, err
+func makeEncoderConfig(cfg Config) zapcore.EncoderConfig {
+	encoderConfig := zap.NewProductionEncoderConfig()
+
+	if !cfg.UnixTS {
+		encoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
 	}
-	return &zapLogger{config: cfg, SugaredLogger: zl.Sugar()}, nil
+
+	encoderConfig.EncodeLevel = encodeLevel
+
+	return encoderConfig
 }
 
 func (l *zapLogger) SetLogLevel(lvl zapcore.Level) {
-	l.config.Level.SetLevel(lvl)
+	l.level.SetLevel(lvl)
 }
 
 func (l *zapLogger) With(args ...interface{}) Logger {
@@ -60,18 +64,6 @@ func (l *zapLogger) Named(name string) Logger {
 	newLogger.SugaredLogger = l.SugaredLogger.Named(name)
 	newLogger.Trace("Named logger created")
 	return &newLogger
-}
-
-func (l *zapLogger) NewRootLogger(lvl zapcore.Level) (Logger, error) {
-	newLogger := *l
-	newLogger.config.Level = zap.NewAtomicLevelAt(lvl)
-	zl, err := newLogger.config.Build()
-	if err != nil {
-		return nil, err
-	}
-	zl = zl.WithOptions(zap.AddCallerSkip(l.callerSkip))
-	newLogger.SugaredLogger = zl.Named(l.name).Sugar().With(l.fields...)
-	return &newLogger, nil
 }
 
 func (l *zapLogger) Helper(skip int) Logger {
@@ -117,5 +109,5 @@ func (l *zapLogger) Sync() error {
 }
 
 func (l *zapLogger) Recover(panicErr interface{}) {
-	l.CriticalW("Recovered goroutine panic", "panic", panicErr)
+	l.Criticalw("Recovered goroutine panic", "panic", panicErr)
 }

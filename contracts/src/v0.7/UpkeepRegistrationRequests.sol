@@ -3,6 +3,7 @@ pragma solidity ^0.7.0;
 
 import "./interfaces/LinkTokenInterface.sol";
 import "./interfaces/KeeperRegistryInterface.sol";
+import "./interfaces/TypeAndVersionInterface.sol";
 import "./vendor/SafeMath96.sol";
 import "./ConfirmedOwner.sol";
 
@@ -16,7 +17,7 @@ import "./ConfirmedOwner.sol";
  * The idea is to have same interface(functions,events) for UI or anyone using this contract irrespective of auto approve being enabled or not.
  * they can just listen to `RegistrationRequested` & `RegistrationApproved` events and know the status on registrations.
  */
-contract UpkeepRegistrationRequests is ConfirmedOwner {
+contract UpkeepRegistrationRequests is TypeAndVersionInterface, ConfirmedOwner {
   using SafeMath96 for uint96;
 
   bytes4 private constant REGISTER_REQUEST_SELECTOR = this.register.selector;
@@ -25,6 +26,12 @@ contract UpkeepRegistrationRequests is ConfirmedOwner {
   mapping(bytes32 => PendingRequest) private s_pendingRequests;
 
   LinkTokenInterface public immutable LINK;
+
+  /**
+   * @notice versions:
+   * - UpkeepRegistration 1.0.0: initial release
+   */
+  string public constant override typeAndVersion = "UpkeepRegistrationRequests 1.0.0";
 
   struct AutoApprovedConfig {
     bool enabled;
@@ -77,7 +84,7 @@ contract UpkeepRegistrationRequests is ConfirmedOwner {
    * @notice register can only be called through transferAndCall on LINK contract
    * @param name string of the upkeep to be registered
    * @param encryptedEmail email address of upkeep contact
-   * @param upkeepContract address to peform upkeep on
+   * @param upkeepContract address to perform upkeep on
    * @param gasLimit amount of gas to provide the target contract when performing upkeep
    * @param adminAddress address to cancel upkeep and withdraw remaining funds
    * @param checkData data passed to the contract when checking for upkeep
@@ -154,7 +161,7 @@ contract UpkeepRegistrationRequests is ConfirmedOwner {
 
   /**
    * @notice owner calls this function to set if registration requests should be sent directly to the Keeper Registry
-   * @param enabled setting for autoapprove registrations
+   * @param enabled setting for auto-approve registrations
    * @param windowSizeInBlocks window size defined in number of blocks
    * @param allowedPerWindow number of registrations that can be auto approved in above window
    * @param keeperRegistry new keeper registry address

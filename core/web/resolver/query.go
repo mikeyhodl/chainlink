@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/graph-gophers/graphql-go"
@@ -25,7 +26,7 @@ func (r *Resolver) Bridge(ctx context.Context, args struct{ ID graphql.ID }) (*B
 		return nil, err
 	}
 
-	name, err := bridges.NewTaskType(string(args.ID))
+	name, err := bridges.ParseBridgeName(string(args.ID))
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +154,7 @@ func (r *Resolver) Job(ctx context.Context, args struct{ ID graphql.ID }) (*JobP
 		return nil, err
 	}
 
-	j, err := r.App.JobORM().FindJobTx(id)
+	j, err := r.App.JobORM().FindJobWithoutSpecErrors(id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return NewJobPayload(r.App, nil, err), nil
@@ -232,7 +233,7 @@ func (r *Resolver) Node(ctx context.Context, args struct{ ID graphql.ID }) (*Nod
 		return nil, err
 	}
 
-	node, err := r.App.EVMORM().Node(id)
+	node, err := r.App.GetChains().EVM.GetNode(ctx, id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return NewNodePayloadResolver(nil, err), nil
@@ -280,7 +281,7 @@ func (r *Resolver) VRFKey(ctx context.Context, args struct {
 
 	key, err := r.App.GetKeyStore().VRF().Get(string(args.ID))
 	if err != nil {
-		if errors.Cause(err) == keystore.ErrMissingVRFKey {
+		if errors.Is(errors.Cause(err), keystore.ErrMissingVRFKey) {
 			return NewVRFKeyPayloadResolver(vrfkey.KeyV2{}, err), nil
 		}
 		return nil, err
@@ -326,7 +327,7 @@ func (r *Resolver) Nodes(ctx context.Context, args struct {
 	offset := pageOffset(args.Offset)
 	limit := pageLimit(args.Limit)
 
-	nodes, count, err := r.App.EVMORM().Nodes(offset, limit)
+	nodes, count, err := r.App.GetChains().EVM.GetNodes(ctx, offset, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -389,7 +390,7 @@ func (r *Resolver) ETHKeys(ctx context.Context) (*ETHKeysPayloadResolver, error)
 	if r.App.GetConfig().Dev() {
 		keys, err = ks.GetAll()
 	} else {
-		keys, err = ks.SendingKeys()
+		keys, err = ks.SendingKeys(nil)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("error getting unlocked keys: %v", err)
@@ -408,8 +409,8 @@ func (r *Resolver) ETHKeys(ctx context.Context) (*ETHKeysPayloadResolver, error)
 			return nil, err
 		}
 
-		chain, err := r.App.GetChainSet().Get(state.EVMChainID.ToInt())
-		if errors.Cause(err) == evm.ErrNoChains {
+		chain, err := r.App.GetChains().EVM.Get(state.EVMChainID.ToInt())
+		if errors.Is(errors.Cause(err), evm.ErrNoChains) {
 			ethKeys = append(ethKeys, ETHKey{
 				addr:  k.Address,
 				state: state,
@@ -427,7 +428,10 @@ func (r *Resolver) ETHKeys(ctx context.Context) (*ETHKeysPayloadResolver, error)
 			chain: chain,
 		})
 	}
-
+	// Put funding keys to the end
+	sort.SliceStable(ethKeys, func(i, j int) bool {
+		return !states[i].IsFunding && states[j].IsFunding
+	})
 	return NewETHKeysPayload(ethKeys), nil
 }
 
@@ -451,7 +455,7 @@ func (r *Resolver) EthTransaction(ctx context.Context, args struct {
 	}
 
 	hash := common.HexToHash(string(args.Hash))
-	etx, err := r.App.BPTXMORM().FindEthTxByHash(hash)
+	etx, err := r.App.TxmORM().FindEthTxByHash(hash)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return NewEthTransactionPayload(nil, err), nil
@@ -474,7 +478,7 @@ func (r *Resolver) EthTransactions(ctx context.Context, args struct {
 	offset := pageOffset(args.Offset)
 	limit := pageLimit(args.Limit)
 
-	txs, count, err := r.App.BPTXMORM().EthTransactions(offset, limit)
+	txs, count, err := r.App.TxmORM().EthTransactions(offset, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -493,7 +497,7 @@ func (r *Resolver) EthTransactionsAttempts(ctx context.Context, args struct {
 	offset := pageOffset(args.Offset)
 	limit := pageLimit(args.Limit)
 
-	attempts, count, err := r.App.BPTXMORM().EthTxAttempts(offset, limit)
+	attempts, count, err := r.App.TxmORM().EthTxAttempts(offset, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -532,4 +536,18 @@ func (r *Resolver) SQLLogging(ctx context.Context) (*GetSQLLoggingPayloadResolve
 	enabled := r.App.GetConfig().LogSQL()
 
 	return NewGetSQLLoggingPayload(enabled), nil
+}
+
+// OCR2KeyBundles resolves the list of OCR2 key bundles
+func (r *Resolver) OCR2KeyBundles(ctx context.Context) (*OCR2KeyBundlesPayloadResolver, error) {
+	if err := authenticateUser(ctx); err != nil {
+		return nil, err
+	}
+
+	ekbs, err := r.App.GetKeyStore().OCR2().GetAll()
+	if err != nil {
+		return nil, err
+	}
+
+	return NewOCR2KeyBundlesPayload(ekbs), nil
 }

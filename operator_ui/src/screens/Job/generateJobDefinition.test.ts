@@ -62,6 +62,7 @@ observationSource = """
         evmChainID: '42',
         minIncomingConfirmations: 3,
         minIncomingConfirmationsEnv: false,
+        minContractPaymentLinkJuels: '100000000000000',
         requesters: ['0x59bbE8CFC79c76857fE0eC27e67E4957370d72B5'],
       },
       observationSource:
@@ -77,6 +78,7 @@ maxTaskDuration = "10s"
 contractAddress = "0x0000000000000000000000000000000000000000"
 evmChainID = "42"
 minIncomingConfirmations = 3
+minContractPaymentLinkJuels = "100000000000000"
 requesters = [ "0x59bbE8CFC79c76857fE0eC27e67E4957370d72B5" ]
 observationSource = """
     fetch    [type=http method=POST url="http://localhost:8001" requestData="{\\\\"hi\\\\": \\\\"hello\\\\"}"];
@@ -344,18 +346,19 @@ observationTimeout = "10s"
         contractID: '0x1469877c88F19E273EFC7Ef3C9D944574583B8a0',
         contractConfigConfirmations: 3,
         contractConfigTrackerPollInterval: '1m0s',
-        contractConfigTrackerSubscribeInterval: '2m0s',
-        juelsPerFeeCoinSource: '1000000000',
         ocrKeyBundleID:
           '4ee612467c3caea7bdab57ab62937adfc4d195516c30139a737f85098b35d9af',
-        isBootstrapPeer: false,
         monitoringEndpoint: 'https://monitoring.endpoint',
-        p2pBootstrapPeers: [
+        p2pv2Bootstrappers: [
           '/ip4/139.59.41.32/tcp/12000/p2p/12D3KooWGKhStcrvCr5RBYKaSRNX4ojrxHcmpJuFmHWenT6aAQAY',
         ],
         relay: 'evm',
         relayConfig: {
           chainID: 1337,
+        },
+        pluginType: 'median',
+        pluginConfig: {
+          juelsPerFeeCoinSource: '1000000000',
         },
         transmitterID: '0x01010CaB43e77116c95745D219af1069fE050d7A',
       },
@@ -378,15 +381,13 @@ blockchainTimeout = "20s"
 contractID = "0x1469877c88F19E273EFC7Ef3C9D944574583B8a0"
 contractConfigConfirmations = 3
 contractConfigTrackerPollInterval = "1m0s"
-contractConfigTrackerSubscribeInterval = "2m0s"
-isBootstrapPeer = false
-juelsPerFeeCoinSource = "1000000000"
 ocrKeyBundleID = "4ee612467c3caea7bdab57ab62937adfc4d195516c30139a737f85098b35d9af"
 monitoringEndpoint = "https://monitoring.endpoint"
-p2pBootstrapPeers = [
+p2pv2Bootstrappers = [
   "/ip4/139.59.41.32/tcp/12000/p2p/12D3KooWGKhStcrvCr5RBYKaSRNX4ojrxHcmpJuFmHWenT6aAQAY"
 ]
 relay = "evm"
+pluginType = "median"
 transmitterID = "0x01010CaB43e77116c95745D219af1069fE050d7A"
 observationSource = """
     fetch    [type=http method=POST url="http://localhost:8001" requestData="{\\\\"hi\\\\": \\\\"hello\\\\"}"];
@@ -397,6 +398,9 @@ observationSource = """
 
 [relayConfig]
 chainID = 1_337
+
+[pluginConfig]
+juelsPerFeeCoinSource = "1000000000"
 `
 
     const output = generateJobDefinition(job)
@@ -416,13 +420,20 @@ chainID = 1_337
         __typename: 'VRFSpec',
         coordinatorAddress: '0x0000000000000000000000000000000000000000',
         evmChainID: '42',
-        fromAddress: '',
+        fromAddresses: ['0x3cCad4715152693fE3BC4460591e3D3Fbd071b42'],
         minIncomingConfirmations: 6,
         minIncomingConfirmationsEnv: false,
         pollPeriod: '10s',
         publicKey:
           '0x92594ee04c179eb7d439ff1baacd98b81a7d7a6ed55c86ca428fa025bd9c914301',
         requestedConfsDelay: 0,
+        requestTimeout: '1h',
+        batchCoordinatorAddress: '0x0000000000000000000000000000000000000000',
+        batchFulfillmentEnabled: true,
+        batchFulfillmentGasMultiplier: 1.0,
+        chunkSize: 25,
+        backoffInitialDelay: '1m',
+        backoffMaxDelay: '1h',
       },
       observationSource:
         '    fetch    [type=http method=POST url="http://localhost:8001" requestData="{\\"hi\\": \\"hello\\"}"];\n    parse    [type=jsonparse path="data,result"];\n    multiply [type=multiply times=100];\n    fetch -> parse -> multiply;\n',
@@ -435,11 +446,18 @@ name = "vrf job"
 externalJobID = "00000000-0000-0000-0000-0000000000001"
 coordinatorAddress = "0x0000000000000000000000000000000000000000"
 evmChainID = "42"
-fromAddress = ""
+fromAddresses = [ "0x3cCad4715152693fE3BC4460591e3D3Fbd071b42" ]
 minIncomingConfirmations = 6
 pollPeriod = "10s"
 publicKey = "0x92594ee04c179eb7d439ff1baacd98b81a7d7a6ed55c86ca428fa025bd9c914301"
 requestedConfsDelay = 0
+requestTimeout = "1h"
+batchCoordinatorAddress = "0x0000000000000000000000000000000000000000"
+batchFulfillmentEnabled = true
+batchFulfillmentGasMultiplier = 1
+chunkSize = 25
+backoffInitialDelay = "1m"
+backoffMaxDelay = "1h"
 observationSource = """
     fetch    [type=http method=POST url="http://localhost:8001" requestData="{\\\\"hi\\\\": \\\\"hello\\\\"}"];
     parse    [type=jsonparse path="data,result"];
@@ -478,6 +496,52 @@ observationSource = """
     multiply [type=multiply times=100];
     fetch -> parse -> multiply;
 """
+`
+    const output = generateJobDefinition(job)
+    expect(output.definition).toEqual(expectedOutput)
+    expect(output.envDefinition).toEqual('')
+  })
+
+  it('generates a valid Bootstrap definition', () => {
+    const job: JobPayload_Fields = {
+      id: '1',
+      type: 'bootstrap',
+      schemaVersion: 1,
+      name: 'bootstrap',
+      externalJobID: '00000000-0000-0000-0000-0000000000001',
+      maxTaskDuration: '10s',
+      spec: {
+        __typename: 'BootstrapSpec',
+        id: '',
+        contractID: '0x0000000000000000000000000000000000000000',
+        relay: 'evm',
+        relayConfig: {
+          chainID: 1337,
+        },
+        monitoringEndpoint: 'https://monitoring.endpoint',
+        blockchainTimeout: '',
+        contractConfigTrackerPollInterval: '60s',
+        contractConfigConfirmations: 1,
+        createdAt: '',
+      },
+      observationSource: '',
+      ...otherJobFields,
+    }
+
+    const expectedOutput = `type = "bootstrap"
+schemaVersion = 1
+name = "bootstrap"
+externalJobID = "00000000-0000-0000-0000-0000000000001"
+id = ""
+contractID = "0x0000000000000000000000000000000000000000"
+relay = "evm"
+monitoringEndpoint = "https://monitoring.endpoint"
+blockchainTimeout = ""
+contractConfigTrackerPollInterval = "60s"
+contractConfigConfirmations = 1
+
+[relayConfig]
+chainID = 1_337
 `
     const output = generateJobDefinition(job)
     expect(output.definition).toEqual(expectedOutput)

@@ -3,25 +3,29 @@ package job_test
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 	"time"
 
-	"github.com/smartcontractkit/chainlink/core/bridges"
-
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/lib/pq"
 	"github.com/pelletier/go-toml"
 	uuid "github.com/satori/go.uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/guregu/null.v4"
 
+	"github.com/smartcontractkit/chainlink/core/bridges"
 	"github.com/smartcontractkit/chainlink/core/internal/cltest"
 	"github.com/smartcontractkit/chainlink/core/internal/testutils/evmtest"
 	"github.com/smartcontractkit/chainlink/core/internal/testutils/pgtest"
 	"github.com/smartcontractkit/chainlink/core/logger"
+	"github.com/smartcontractkit/chainlink/core/services/blockhashstore"
 	"github.com/smartcontractkit/chainlink/core/services/directrequest"
 	"github.com/smartcontractkit/chainlink/core/services/job"
 	"github.com/smartcontractkit/chainlink/core/services/keeper"
-	"github.com/smartcontractkit/chainlink/core/services/offchainreporting"
+	"github.com/smartcontractkit/chainlink/core/services/ocr"
+	"github.com/smartcontractkit/chainlink/core/services/ocrbootstrap"
 	"github.com/smartcontractkit/chainlink/core/services/pipeline"
 	"github.com/smartcontractkit/chainlink/core/services/vrf"
 	"github.com/smartcontractkit/chainlink/core/services/webhook"
@@ -54,13 +58,13 @@ func TestORM(t *testing.T) {
 		require.NoError(t, err)
 
 		var returnedSpec job.Job
-		var OCROracleSpec job.OffchainReportingOracleSpec
+		var OCROracleSpec job.OCROracleSpec
 
 		err = db.Get(&returnedSpec, "SELECT * FROM jobs WHERE jobs.id = $1", jb.ID)
 		require.NoError(t, err)
-		err = db.Get(&OCROracleSpec, "SELECT * FROM offchainreporting_oracle_specs WHERE offchainreporting_oracle_specs.id = $1", jb.OffchainreportingOracleSpecID)
+		err = db.Get(&OCROracleSpec, "SELECT * FROM ocr_oracle_specs WHERE ocr_oracle_specs.id = $1", jb.OCROracleSpecID)
 		require.NoError(t, err)
-		returnedSpec.OffchainreportingOracleSpec = &OCROracleSpec
+		returnedSpec.OCROracleSpec = &OCROracleSpec
 		compareOCRJobSpecs(t, *jb, returnedSpec)
 	})
 
@@ -119,12 +123,12 @@ func TestORM(t *testing.T) {
 		assert.Equal(t, specErrors[1].Description, ocrSpecError2)
 		assert.True(t, specErrors[1].CreatedAt.After(specErrors[0].UpdatedAt))
 		var j2 job.Job
-		var OCROracleSpec job.OffchainReportingOracleSpec
+		var OCROracleSpec job.OCROracleSpec
 		var jobSpecErrors []job.SpecError
 
 		err = db.Get(&j2, "SELECT * FROM jobs WHERE jobs.id = $1", jobSpec.ID)
 		require.NoError(t, err)
-		err = db.Get(&OCROracleSpec, "SELECT * FROM offchainreporting_oracle_specs WHERE offchainreporting_oracle_specs.id = $1", j2.OffchainreportingOracleSpecID)
+		err = db.Get(&OCROracleSpec, "SELECT * FROM ocr_oracle_specs WHERE ocr_oracle_specs.id = $1", j2.OCROracleSpecID)
 		require.NoError(t, err)
 		err = db.Select(&jobSpecErrors, "SELECT * FROM job_spec_errors WHERE job_spec_errors.job_id = $1", j2.ID)
 		require.NoError(t, err)
@@ -149,19 +153,26 @@ func TestORM(t *testing.T) {
 		require.NoError(t, orm.RecordError(jobSpec.ID, ocrSpecError1))
 		require.NoError(t, orm.RecordError(jobSpec.ID, ocrSpecError2))
 
-		expected1ID := specErrors[1].ID + 1
-		expected2ID := specErrors[1].ID + 2
-		specErr1, err := orm.FindSpecError(expected1ID)
+		var updatedSpecError []job.SpecError
+
+		err = db.Select(&updatedSpecError, "SELECT * FROM job_spec_errors ORDER BY id ASC")
 		require.NoError(t, err)
-		specErr2, err := orm.FindSpecError(expected2ID)
+		require.Len(t, updatedSpecError, 4)
+
+		assert.Equal(t, uint(1), updatedSpecError[2].Occurrences)
+		assert.Equal(t, uint(1), updatedSpecError[3].Occurrences)
+		assert.Equal(t, ocrSpecError1, updatedSpecError[2].Description)
+		assert.Equal(t, ocrSpecError2, updatedSpecError[3].Description)
+
+		dbSpecErr1, err := orm.FindSpecError(updatedSpecError[2].ID)
+		require.NoError(t, err)
+		dbSpecErr2, err := orm.FindSpecError(updatedSpecError[3].ID)
 		require.NoError(t, err)
 
-		assert.Equal(t, specErr1.ID, expected1ID)
-		assert.Equal(t, specErr2.ID, expected2ID)
-		assert.Equal(t, specErr1.Occurrences, uint(1))
-		assert.Equal(t, specErr2.Occurrences, uint(1))
-		assert.Equal(t, specErr1.Description, ocrSpecError1)
-		assert.Equal(t, specErr2.Description, ocrSpecError2)
+		assert.Equal(t, uint(1), dbSpecErr1.Occurrences)
+		assert.Equal(t, uint(1), dbSpecErr2.Occurrences)
+		assert.Equal(t, ocrSpecError1, dbSpecErr1.Description)
+		assert.Equal(t, ocrSpecError2, dbSpecErr2.Description)
 	})
 
 	t.Run("creates a job with a direct request spec", func(t *testing.T) {
@@ -190,6 +201,33 @@ func TestORM(t *testing.T) {
 
 		cltest.AssertCount(t, db, "external_initiator_webhook_specs", 2)
 	})
+
+	t.Run("it creates and deletes records for blockhash store jobs", func(t *testing.T) {
+		jb, err := blockhashstore.ValidatedSpec(
+			testspecs.GenerateBlockhashStoreSpec(testspecs.BlockhashStoreSpecParams{}).Toml())
+		require.NoError(t, err)
+
+		err = orm.CreateJob(&jb)
+		require.NoError(t, err)
+		savedJob, err := orm.FindJob(context.Background(), jb.ID)
+		require.NoError(t, err)
+		require.Equal(t, jb.ID, savedJob.ID)
+		require.Equal(t, jb.Type, savedJob.Type)
+		require.Equal(t, jb.BlockhashStoreSpec.ID, savedJob.BlockhashStoreSpec.ID)
+		require.Equal(t, jb.BlockhashStoreSpec.CoordinatorV1Address, savedJob.BlockhashStoreSpec.CoordinatorV1Address)
+		require.Equal(t, jb.BlockhashStoreSpec.CoordinatorV2Address, savedJob.BlockhashStoreSpec.CoordinatorV2Address)
+		require.Equal(t, jb.BlockhashStoreSpec.WaitBlocks, savedJob.BlockhashStoreSpec.WaitBlocks)
+		require.Equal(t, jb.BlockhashStoreSpec.LookbackBlocks, savedJob.BlockhashStoreSpec.LookbackBlocks)
+		require.Equal(t, jb.BlockhashStoreSpec.BlockhashStoreAddress, savedJob.BlockhashStoreSpec.BlockhashStoreAddress)
+		require.Equal(t, jb.BlockhashStoreSpec.PollPeriod, savedJob.BlockhashStoreSpec.PollPeriod)
+		require.Equal(t, jb.BlockhashStoreSpec.RunTimeout, savedJob.BlockhashStoreSpec.RunTimeout)
+		require.Equal(t, jb.BlockhashStoreSpec.EVMChainID, savedJob.BlockhashStoreSpec.EVMChainID)
+		require.Equal(t, jb.BlockhashStoreSpec.FromAddress, savedJob.BlockhashStoreSpec.FromAddress)
+		err = orm.DeleteJob(jb.ID)
+		require.NoError(t, err)
+		_, err = orm.FindJob(context.Background(), jb.ID)
+		require.Error(t, err)
+	})
 }
 
 func TestORM_DeleteJob_DeletesAssociatedRecords(t *testing.T) {
@@ -203,14 +241,14 @@ func TestORM_DeleteJob_DeletesAssociatedRecords(t *testing.T) {
 	pipelineORM := pipeline.NewORM(db, logger.TestLogger(t), config)
 	cc := evmtest.NewChainSet(t, evmtest.TestChainOpts{DB: db, GeneralConfig: config})
 	jobORM := job.NewTestORM(t, db, cc, pipelineORM, keyStore, config)
-	korm := keeper.NewORM(db, logger.TestLogger(t), nil, nil, nil)
+	korm := keeper.NewORM(db, logger.TestLogger(t), nil, nil)
 
 	t.Run("it deletes records for offchainreporting jobs", func(t *testing.T) {
 		_, bridge := cltest.MustCreateBridge(t, db, cltest.BridgeOpts{}, config)
 		_, bridge2 := cltest.MustCreateBridge(t, db, cltest.BridgeOpts{}, config)
 
 		_, address := cltest.MustInsertRandomKey(t, keyStore.Eth())
-		jb, err := offchainreporting.ValidatedOracleSpecToml(cc, testspecs.GenerateOCRSpec(testspecs.OCRSpecParams{
+		jb, err := ocr.ValidatedOracleSpecToml(cc, testspecs.GenerateOCRSpec(testspecs.OCRSpecParams{
 			TransmitterAddress: address.Hex(),
 			DS1BridgeName:      bridge.Name.String(),
 			DS2BridgeName:      bridge2.Name.String(),
@@ -220,18 +258,18 @@ func TestORM_DeleteJob_DeletesAssociatedRecords(t *testing.T) {
 		err = jobORM.CreateJob(&jb)
 		require.NoError(t, err)
 
-		cltest.AssertCount(t, db, "offchainreporting_oracle_specs", 1)
+		cltest.AssertCount(t, db, "ocr_oracle_specs", 1)
 		cltest.AssertCount(t, db, "pipeline_specs", 1)
 
 		err = jobORM.DeleteJob(jb.ID)
 		require.NoError(t, err)
-		cltest.AssertCount(t, db, "offchainreporting_oracle_specs", 0)
+		cltest.AssertCount(t, db, "ocr_oracle_specs", 0)
 		cltest.AssertCount(t, db, "pipeline_specs", 0)
 		cltest.AssertCount(t, db, "jobs", 0)
 	})
 
 	t.Run("it deletes records for keeper jobs", func(t *testing.T) {
-		registry, keeperJob := cltest.MustInsertKeeperRegistry(t, db, korm, keyStore.Eth())
+		registry, keeperJob := cltest.MustInsertKeeperRegistry(t, db, korm, keyStore.Eth(), 0, 1, 20)
 		cltest.MustInsertUpkeepForRegistry(t, db, config, registry)
 
 		cltest.AssertCount(t, db, "keeper_specs", 1)
@@ -293,42 +331,179 @@ func TestORM_CreateJob_VRFV2(t *testing.T) {
 	config := evmtest.NewChainScopedConfig(t, cltest.NewTestGeneralConfig(t))
 	db := pgtest.NewSqlxDB(t)
 	keyStore := cltest.NewKeyStore(t, db, config)
-	keyStore.OCR().Add(cltest.DefaultOCRKey)
+	require.NoError(t, keyStore.OCR().Add(cltest.DefaultOCRKey))
 
 	pipelineORM := pipeline.NewORM(db, logger.TestLogger(t), config)
 	cc := evmtest.NewChainSet(t, evmtest.TestChainOpts{DB: db, GeneralConfig: config})
 	jobORM := job.NewTestORM(t, db, cc, pipelineORM, keyStore, config)
 
-	jb, err := vrf.ValidatedVRFSpec(testspecs.GenerateVRFSpec(testspecs.VRFSpecParams{RequestedConfsDelay: 10}).Toml())
+	fromAddresses := []string{cltest.NewEIP55Address().String(), cltest.NewEIP55Address().String()}
+	jb, err := vrf.ValidatedVRFSpec(testspecs.GenerateVRFSpec(
+		testspecs.VRFSpecParams{
+			RequestedConfsDelay: 10,
+			FromAddresses:       fromAddresses,
+			ChunkSize:           25,
+			BackoffInitialDelay: time.Minute,
+			BackoffMaxDelay:     time.Hour}).
+		Toml())
 	require.NoError(t, err)
 
-	err = jobORM.CreateJob(&jb)
-	require.NoError(t, err)
+	require.NoError(t, jobORM.CreateJob(&jb))
 	cltest.AssertCount(t, db, "vrf_specs", 1)
 	cltest.AssertCount(t, db, "jobs", 1)
 	var requestedConfsDelay int64
 	require.NoError(t, db.Get(&requestedConfsDelay, `SELECT requested_confs_delay FROM vrf_specs LIMIT 1`))
 	require.Equal(t, int64(10), requestedConfsDelay)
+	var batchFulfillmentEnabled bool
+	require.NoError(t, db.Get(&batchFulfillmentEnabled, `SELECT batch_fulfillment_enabled FROM vrf_specs LIMIT 1`))
+	require.False(t, batchFulfillmentEnabled)
+	var batchFulfillmentGasMultiplier float64
+	require.NoError(t, db.Get(&batchFulfillmentGasMultiplier, `SELECT batch_fulfillment_gas_multiplier FROM vrf_specs LIMIT 1`))
+	require.Equal(t, float64(1.0), batchFulfillmentGasMultiplier)
 	var requestTimeout time.Duration
 	require.NoError(t, db.Get(&requestTimeout, `SELECT request_timeout FROM vrf_specs LIMIT 1`))
 	require.Equal(t, 24*time.Hour, requestTimeout)
-	jobORM.DeleteJob(jb.ID)
+	var backoffInitialDelay time.Duration
+	require.NoError(t, db.Get(&backoffInitialDelay, `SELECT backoff_initial_delay FROM vrf_specs LIMIT 1`))
+	require.Equal(t, time.Minute, backoffInitialDelay)
+	var backoffMaxDelay time.Duration
+	require.NoError(t, db.Get(&backoffMaxDelay, `SELECT backoff_max_delay FROM vrf_specs LIMIT 1`))
+	require.Equal(t, time.Hour, backoffMaxDelay)
+	var chunkSize int
+	require.NoError(t, db.Get(&chunkSize, `SELECT chunk_size FROM vrf_specs LIMIT 1`))
+	require.Equal(t, 25, chunkSize)
+	var fa pq.ByteaArray
+	require.NoError(t, db.Get(&fa, `SELECT from_addresses FROM vrf_specs LIMIT 1`))
+	var actual []string
+	for _, b := range fa {
+		actual = append(actual, common.BytesToAddress(b).String())
+	}
+	require.ElementsMatch(t, fromAddresses, actual)
+	require.NoError(t, jobORM.DeleteJob(jb.ID))
 	cltest.AssertCount(t, db, "vrf_specs", 0)
 	cltest.AssertCount(t, db, "jobs", 0)
 
 	jb, err = vrf.ValidatedVRFSpec(testspecs.GenerateVRFSpec(testspecs.VRFSpecParams{RequestTimeout: 1 * time.Hour}).Toml())
 	require.NoError(t, err)
-	err = jobORM.CreateJob(&jb)
-	require.NoError(t, err)
+	require.NoError(t, jobORM.CreateJob(&jb))
 	cltest.AssertCount(t, db, "vrf_specs", 1)
 	cltest.AssertCount(t, db, "jobs", 1)
 	require.NoError(t, db.Get(&requestedConfsDelay, `SELECT requested_confs_delay FROM vrf_specs LIMIT 1`))
 	require.Equal(t, int64(0), requestedConfsDelay)
 	require.NoError(t, db.Get(&requestTimeout, `SELECT request_timeout FROM vrf_specs LIMIT 1`))
 	require.Equal(t, 1*time.Hour, requestTimeout)
-	jobORM.DeleteJob(jb.ID)
+	require.NoError(t, jobORM.DeleteJob(jb.ID))
 	cltest.AssertCount(t, db, "vrf_specs", 0)
 	cltest.AssertCount(t, db, "jobs", 0)
+}
+
+func TestORM_CreateJob_OCRBootstrap(t *testing.T) {
+	config := evmtest.NewChainScopedConfig(t, cltest.NewTestGeneralConfig(t))
+	db := pgtest.NewSqlxDB(t)
+	keyStore := cltest.NewKeyStore(t, db, config)
+	keyStore.OCR().Add(cltest.DefaultOCRKey)
+
+	pipelineORM := pipeline.NewORM(db, logger.TestLogger(t), config)
+	cc := evmtest.NewChainSet(t, evmtest.TestChainOpts{DB: db, GeneralConfig: config})
+	jobORM := job.NewTestORM(t, db, cc, pipelineORM, keyStore, config)
+
+	jb, err := ocrbootstrap.ValidatedBootstrapSpecToml(testspecs.OCRBootstrapSpec)
+	require.NoError(t, err)
+
+	err = jobORM.CreateJob(&jb)
+	require.NoError(t, err)
+	cltest.AssertCount(t, db, "bootstrap_specs", 1)
+	cltest.AssertCount(t, db, "jobs", 1)
+	var relay string
+	require.NoError(t, db.Get(&relay, `SELECT relay FROM bootstrap_specs LIMIT 1`))
+	require.Equal(t, "evm", relay)
+
+	jobORM.DeleteJob(jb.ID)
+	cltest.AssertCount(t, db, "bootstrap_specs", 0)
+	cltest.AssertCount(t, db, "jobs", 0)
+}
+
+func TestORM_CreateJob_OCR_DuplicatedContractAddress(t *testing.T) {
+	config := evmtest.NewChainScopedConfig(t, cltest.NewTestGeneralConfig(t))
+	db := pgtest.NewSqlxDB(t)
+	keyStore := cltest.NewKeyStore(t, db, config)
+	keyStore.OCR().Add(cltest.DefaultOCRKey)
+
+	pipelineORM := pipeline.NewORM(db, logger.TestLogger(t), config)
+	cc := evmtest.NewChainSet(t, evmtest.TestChainOpts{DB: db, GeneralConfig: config})
+	jobORM := job.NewTestORM(t, db, cc, pipelineORM, keyStore, config)
+
+	chain, err := cc.Default()
+	require.NoError(t, err)
+
+	_, address := cltest.MustInsertRandomKey(t, keyStore.Eth())
+	_, bridge := cltest.MustCreateBridge(t, db, cltest.BridgeOpts{}, config)
+	_, bridge2 := cltest.MustCreateBridge(t, db, cltest.BridgeOpts{}, config)
+
+	t.Run("with the default chain id", func(t *testing.T) {
+		spec := testspecs.GenerateOCRSpec(testspecs.OCRSpecParams{
+			DS1BridgeName:      bridge.Name.String(),
+			DS2BridgeName:      bridge2.Name.String(),
+			TransmitterAddress: address.Hex(),
+		})
+		jb, err := ocr.ValidatedOracleSpecToml(cc, spec.Toml())
+		require.NoError(t, err)
+
+		err = jobORM.CreateJob(&jb)
+		require.NoError(t, err)
+		cltest.AssertCount(t, db, "ocr_oracle_specs", 1)
+		cltest.AssertCount(t, db, "jobs", 1)
+
+		spec2 := testspecs.GenerateOCRSpec(testspecs.OCRSpecParams{
+			EVMChainID:         chain.ID().String(),
+			DS1BridgeName:      bridge.Name.String(),
+			DS2BridgeName:      bridge2.Name.String(),
+			TransmitterAddress: address.Hex(),
+		})
+		jb2, err := ocr.ValidatedOracleSpecToml(cc, spec2.Toml())
+		require.NoError(t, err)
+
+		err = jobORM.CreateJob(&jb2)
+		require.Error(t, err)
+		assert.Equal(t, err.Error(), fmt.Sprintf("CreateJobFailed: a job with contract address %s already exists for chain ID %d", jb2.OCROracleSpec.ContractAddress, jb2.OCROracleSpec.EVMChainID.ToInt()))
+	})
+
+	t.Run("with a set chain id", func(t *testing.T) {
+		externalJobID := uuid.NullUUID{UUID: uuid.NewV4(), Valid: true}
+		_, contractAddress := cltest.MustInsertRandomKey(t, keyStore.Eth())
+
+		spec := testspecs.GenerateOCRSpec(testspecs.OCRSpecParams{
+			EVMChainID:         chain.ID().String(),
+			DS1BridgeName:      bridge.Name.String(),
+			DS2BridgeName:      bridge2.Name.String(),
+			TransmitterAddress: address.Hex(),
+			ContractAddress:    contractAddress.Hex(),
+			JobID:              externalJobID.UUID.String(),
+			Name:               "with a chain id",
+		})
+
+		jb, err := ocr.ValidatedOracleSpecToml(cc, spec.Toml())
+		require.NoError(t, err)
+
+		err = jobORM.CreateJob(&jb)
+		require.NoError(t, err)
+
+		spec2 := testspecs.GenerateOCRSpec(testspecs.OCRSpecParams{
+			EVMChainID:         chain.ID().String(),
+			DS1BridgeName:      bridge.Name.String(),
+			DS2BridgeName:      bridge2.Name.String(),
+			TransmitterAddress: address.Hex(),
+			ContractAddress:    contractAddress.Hex(),
+			JobID:              externalJobID.UUID.String(),
+			Name:               "with a chain id 2",
+		})
+		jb2, err := ocr.ValidatedOracleSpecToml(cc, spec2.Toml())
+		require.NoError(t, err)
+
+		err = jobORM.CreateJob(&jb2)
+		require.Error(t, err)
+		assert.Equal(t, err.Error(), fmt.Sprintf("CreateJobFailed: a job with contract address %s already exists for chain ID %d", jb2.OCROracleSpec.ContractAddress, chain.ID()))
+	})
 }
 
 func Test_FindJobs(t *testing.T) {
@@ -348,7 +523,7 @@ func Test_FindJobs(t *testing.T) {
 	_, bridge2 := cltest.MustCreateBridge(t, db, cltest.BridgeOpts{}, config)
 
 	_, address := cltest.MustInsertRandomKey(t, keyStore.Eth())
-	jb1, err := offchainreporting.ValidatedOracleSpecToml(cc,
+	jb1, err := ocr.ValidatedOracleSpecToml(cc,
 		testspecs.GenerateOCRSpec(testspecs.OCRSpecParams{
 			JobID:              uuid.NewV4().String(),
 			TransmitterAddress: address.Hex(),
@@ -415,7 +590,7 @@ func Test_FindJob(t *testing.T) {
 
 	externalJobID := uuid.NewV4()
 	_, address := cltest.MustInsertRandomKey(t, keyStore.Eth())
-	jb, err := offchainreporting.ValidatedOracleSpecToml(cc,
+	job, err := ocr.ValidatedOracleSpecToml(cc,
 		testspecs.GenerateOCRSpec(testspecs.OCRSpecParams{
 			JobID:              externalJobID.String(),
 			TransmitterAddress: address.Hex(),
@@ -425,35 +600,46 @@ func Test_FindJob(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	err = orm.CreateJob(&jb)
+	err = orm.CreateJob(&job)
 	require.NoError(t, err)
 
 	t.Run("by id", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		jb, err = orm.FindJob(ctx, jb.ID)
+		jb, err := orm.FindJob(ctx, job.ID)
 		require.NoError(t, err)
 
-		assert.Equal(t, jb.ID, jb.ID)
-		assert.Equal(t, jb.Name, jb.Name)
+		assert.Equal(t, jb.ID, job.ID)
+		assert.Equal(t, jb.Name, job.Name)
 
 		require.Greater(t, jb.PipelineSpecID, int32(0))
 		require.NotNil(t, jb.PipelineSpec)
-		require.NotNil(t, jb.OffchainreportingOracleSpecID)
-		require.NotNil(t, jb.OffchainreportingOracleSpec)
+		require.NotNil(t, jb.OCROracleSpecID)
+		require.NotNil(t, jb.OCROracleSpec)
 	})
 
 	t.Run("by external job id", func(t *testing.T) {
 		jb, err := orm.FindJobByExternalJobID(externalJobID)
 		require.NoError(t, err)
 
-		assert.Equal(t, jb.ID, jb.ID)
-		assert.Equal(t, jb.Name, jb.Name)
+		assert.Equal(t, jb.ID, job.ID)
+		assert.Equal(t, jb.Name, job.Name)
 
 		require.Greater(t, jb.PipelineSpecID, int32(0))
 		require.NotNil(t, jb.PipelineSpec)
-		require.NotNil(t, jb.OffchainreportingOracleSpecID)
-		require.NotNil(t, jb.OffchainreportingOracleSpec)
+		require.NotNil(t, jb.OCROracleSpecID)
+		require.NotNil(t, jb.OCROracleSpec)
+	})
+
+	t.Run("by address", func(t *testing.T) {
+		jbID, err := orm.FindJobIDByAddress(job.OCROracleSpec.ContractAddress)
+		require.NoError(t, err)
+
+		assert.Equal(t, job.ID, jbID)
+
+		_, err = orm.FindJobIDByAddress("not-existing")
+		require.Error(t, err)
+		require.ErrorIs(t, err, sql.ErrNoRows)
 	})
 }
 
@@ -463,7 +649,7 @@ func Test_FindJobsByPipelineSpecIDs(t *testing.T) {
 	config := cltest.NewTestGeneralConfig(t)
 	db := pgtest.NewSqlxDB(t)
 	keyStore := cltest.NewKeyStore(t, db, config)
-	keyStore.OCR().Add(cltest.DefaultOCRKey)
+	require.NoError(t, keyStore.OCR().Add(cltest.DefaultOCRKey))
 
 	pipelineORM := pipeline.NewORM(db, logger.TestLogger(t), config)
 	cc := evmtest.NewChainSet(t, evmtest.TestChainOpts{DB: db, GeneralConfig: config})
@@ -513,7 +699,7 @@ func Test_FindPipelineRuns(t *testing.T) {
 
 	externalJobID := uuid.NewV4()
 	_, address := cltest.MustInsertRandomKey(t, keyStore.Eth())
-	jb, err := offchainreporting.ValidatedOracleSpecToml(cc,
+	jb, err := ocr.ValidatedOracleSpecToml(cc,
 		testspecs.GenerateOCRSpec(testspecs.OCRSpecParams{
 			JobID:              externalJobID.String(),
 			TransmitterAddress: address.Hex(),
@@ -560,7 +746,7 @@ func Test_PipelineRunsByJobID(t *testing.T) {
 	db := pgtest.NewSqlxDB(t)
 
 	keyStore := cltest.NewKeyStore(t, db, config)
-	keyStore.OCR().Add(cltest.DefaultOCRKey)
+	require.NoError(t, keyStore.OCR().Add(cltest.DefaultOCRKey))
 	require.NoError(t, keyStore.P2P().Add(cltest.DefaultP2PKey))
 
 	pipelineORM := pipeline.NewORM(db, logger.TestLogger(t), config)
@@ -572,7 +758,7 @@ func Test_PipelineRunsByJobID(t *testing.T) {
 
 	externalJobID := uuid.NewV4()
 	_, address := cltest.MustInsertRandomKey(t, keyStore.Eth())
-	jb, err := offchainreporting.ValidatedOracleSpecToml(cc,
+	jb, err := ocr.ValidatedOracleSpecToml(cc,
 		testspecs.GenerateOCRSpec(testspecs.OCRSpecParams{
 			JobID:              externalJobID.String(),
 			TransmitterAddress: address.Hex(),
@@ -630,7 +816,7 @@ func Test_FindPipelineRunIDsByJobID(t *testing.T) {
 
 	externalJobID := uuid.NewV4()
 	_, address := cltest.MustInsertRandomKey(t, keyStore.Eth())
-	jb, err := offchainreporting.ValidatedOracleSpecToml(cc,
+	jb, err := ocr.ValidatedOracleSpecToml(cc,
 		testspecs.GenerateOCRSpec(testspecs.OCRSpecParams{
 			JobID:              externalJobID.String(),
 			TransmitterAddress: address.Hex(),
@@ -679,7 +865,7 @@ func Test_FindPipelineRunsByIDs(t *testing.T) {
 
 	externalJobID := uuid.NewV4()
 	_, address := cltest.MustInsertRandomKey(t, keyStore.Eth())
-	jb, err := offchainreporting.ValidatedOracleSpecToml(cc,
+	jb, err := ocr.ValidatedOracleSpecToml(cc,
 		testspecs.GenerateOCRSpec(testspecs.OCRSpecParams{
 			JobID:              externalJobID.String(),
 			TransmitterAddress: address.Hex(),
@@ -759,6 +945,77 @@ func Test_FindPipelineRunByID(t *testing.T) {
 	})
 }
 
+func Test_FindJobWithoutSpecErrors(t *testing.T) {
+	t.Parallel()
+
+	config := cltest.NewTestGeneralConfig(t)
+	db := pgtest.NewSqlxDB(t)
+
+	keyStore := cltest.NewKeyStore(t, db, config)
+	err := keyStore.OCR().Add(cltest.DefaultOCRKey)
+	require.NoError(t, err)
+
+	pipelineORM := pipeline.NewORM(db, logger.TestLogger(t), config)
+	cc := evmtest.NewChainSet(t, evmtest.TestChainOpts{DB: db, GeneralConfig: config})
+	orm := job.NewTestORM(t, db, cc, pipelineORM, keyStore, config)
+
+	jb, err := directrequest.ValidatedDirectRequestSpec(testspecs.DirectRequestSpec)
+	require.NoError(t, err)
+
+	err = orm.CreateJob(&jb)
+	require.NoError(t, err)
+	var jobSpec job.Job
+	err = db.Get(&jobSpec, "SELECT * FROM jobs")
+	require.NoError(t, err)
+
+	ocrSpecError1 := "ocr spec 1 errored"
+	ocrSpecError2 := "ocr spec 2 errored"
+	require.NoError(t, orm.RecordError(jobSpec.ID, ocrSpecError1))
+	require.NoError(t, orm.RecordError(jobSpec.ID, ocrSpecError2))
+
+	jb, err = orm.FindJobWithoutSpecErrors(jobSpec.ID)
+	require.NoError(t, err)
+	jbWithErrors, err := orm.FindJobTx(jobSpec.ID)
+	require.NoError(t, err)
+
+	assert.Equal(t, len(jb.JobSpecErrors), 0)
+	assert.Equal(t, len(jbWithErrors.JobSpecErrors), 2)
+}
+
+func Test_FindSpecErrorsByJobIDs(t *testing.T) {
+	t.Parallel()
+
+	config := cltest.NewTestGeneralConfig(t)
+	db := pgtest.NewSqlxDB(t)
+
+	keyStore := cltest.NewKeyStore(t, db, config)
+	err := keyStore.OCR().Add(cltest.DefaultOCRKey)
+	require.NoError(t, err)
+
+	pipelineORM := pipeline.NewORM(db, logger.TestLogger(t), config)
+	cc := evmtest.NewChainSet(t, evmtest.TestChainOpts{DB: db, GeneralConfig: config})
+	orm := job.NewTestORM(t, db, cc, pipelineORM, keyStore, config)
+
+	jb, err := directrequest.ValidatedDirectRequestSpec(testspecs.DirectRequestSpec)
+	require.NoError(t, err)
+
+	err = orm.CreateJob(&jb)
+	require.NoError(t, err)
+	var jobSpec job.Job
+	err = db.Get(&jobSpec, "SELECT * FROM jobs")
+	require.NoError(t, err)
+
+	ocrSpecError1 := "ocr spec 1 errored"
+	ocrSpecError2 := "ocr spec 2 errored"
+	require.NoError(t, orm.RecordError(jobSpec.ID, ocrSpecError1))
+	require.NoError(t, orm.RecordError(jobSpec.ID, ocrSpecError2))
+
+	specErrs, err := orm.FindSpecErrorsByJobIDs([]int32{jobSpec.ID})
+	require.NoError(t, err)
+
+	assert.Equal(t, len(specErrs), 2)
+}
+
 func Test_CountPipelineRunsByJobID(t *testing.T) {
 	t.Parallel()
 
@@ -778,7 +1035,7 @@ func Test_CountPipelineRunsByJobID(t *testing.T) {
 
 	externalJobID := uuid.NewV4()
 	_, address := cltest.MustInsertRandomKey(t, keyStore.Eth())
-	jb, err := offchainreporting.ValidatedOracleSpecToml(cc,
+	jb, err := ocr.ValidatedOracleSpecToml(cc,
 		testspecs.GenerateOCRSpec(testspecs.OCRSpecParams{
 			JobID:              externalJobID.String(),
 			TransmitterAddress: address.Hex(),

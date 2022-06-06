@@ -16,9 +16,7 @@ import (
 	"testing"
 	"time"
 
-	ocrcommontypes "github.com/smartcontractkit/libocr/commontypes"
-	ocrnetworking "github.com/smartcontractkit/libocr/networking"
-
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind/backends"
 	"github.com/ethereum/go-ethereum/common"
@@ -29,9 +27,24 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/onsi/gomega"
 	uuid "github.com/satori/go.uuid"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
+	"gopkg.in/guregu/null.v4"
+
+	ocrcommontypes "github.com/smartcontractkit/libocr/commontypes"
+	"github.com/smartcontractkit/libocr/gethwrappers/offchainaggregator"
+	"github.com/smartcontractkit/libocr/gethwrappers/testoffchainaggregator"
+	ocrnetworking "github.com/smartcontractkit/libocr/networking"
+	"github.com/smartcontractkit/libocr/offchainreporting/confighelper"
+	ocrtypes "github.com/smartcontractkit/libocr/offchainreporting/types"
+
 	"github.com/smartcontractkit/chainlink/core/assets"
 	"github.com/smartcontractkit/chainlink/core/auth"
 	"github.com/smartcontractkit/chainlink/core/bridges"
+	"github.com/smartcontractkit/chainlink/core/chains/evm/gas"
 	evmtypes "github.com/smartcontractkit/chainlink/core/chains/evm/types"
 	"github.com/smartcontractkit/chainlink/core/internal/cltest"
 	"github.com/smartcontractkit/chainlink/core/internal/cltest/heavyweight"
@@ -40,15 +53,14 @@ import (
 	"github.com/smartcontractkit/chainlink/core/internal/gethwrappers/generated/link_token_interface"
 	"github.com/smartcontractkit/chainlink/core/internal/gethwrappers/generated/multiwordconsumer_wrapper"
 	"github.com/smartcontractkit/chainlink/core/internal/gethwrappers/generated/operator_wrapper"
+	"github.com/smartcontractkit/chainlink/core/internal/testutils"
 	"github.com/smartcontractkit/chainlink/core/internal/testutils/configtest"
 	"github.com/smartcontractkit/chainlink/core/internal/testutils/evmtest"
 	"github.com/smartcontractkit/chainlink/core/internal/testutils/pgtest"
 	"github.com/smartcontractkit/chainlink/core/logger"
-	"github.com/smartcontractkit/chainlink/core/services/eth"
-	"github.com/smartcontractkit/chainlink/core/services/gas"
 	"github.com/smartcontractkit/chainlink/core/services/job"
 	"github.com/smartcontractkit/chainlink/core/services/keystore/keys/ocrkey"
-	"github.com/smartcontractkit/chainlink/core/services/offchainreporting"
+	"github.com/smartcontractkit/chainlink/core/services/ocr"
 	"github.com/smartcontractkit/chainlink/core/services/pipeline"
 	"github.com/smartcontractkit/chainlink/core/services/webhook"
 	"github.com/smartcontractkit/chainlink/core/static"
@@ -56,14 +68,6 @@ import (
 	"github.com/smartcontractkit/chainlink/core/utils"
 	"github.com/smartcontractkit/chainlink/core/web"
 	webauth "github.com/smartcontractkit/chainlink/core/web/auth"
-	"github.com/smartcontractkit/libocr/gethwrappers/offchainaggregator"
-	"github.com/smartcontractkit/libocr/gethwrappers/testoffchainaggregator"
-	"github.com/smartcontractkit/libocr/offchainreporting/confighelper"
-	ocrtypes "github.com/smartcontractkit/libocr/offchainreporting/types"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
-	"github.com/stretchr/testify/require"
-	"gopkg.in/guregu/null.v4"
 )
 
 var oneETH = assets.Eth(*big.NewInt(1000000000000000000))
@@ -71,15 +75,14 @@ var oneETH = assets.Eth(*big.NewInt(1000000000000000000))
 func TestIntegration_ExternalInitiatorV2(t *testing.T) {
 	t.Parallel()
 
-	ethClient, _, assertMockCalls := cltest.NewEthMocksWithStartupAssertions(t)
-	defer assertMockCalls()
+	ethClient := cltest.NewEthMocksWithStartupAssertions(t)
 
 	cfg := cltest.NewTestGeneralConfig(t)
 	cfg.Overrides.FeatureExternalInitiators = null.BoolFrom(true)
 	cfg.Overrides.SetTriggerFallbackDBPollInterval(10 * time.Millisecond)
 
 	app := cltest.NewApplicationWithConfig(t, cfg, ethClient, cltest.UseRealExternalInitiatorManager)
-	require.NoError(t, app.Start())
+	require.NoError(t, app.Start(testutils.Context(t)))
 
 	var (
 		eiName    = "substrate-ei"
@@ -164,7 +167,7 @@ func TestIntegration_ExternalInitiatorV2(t *testing.T) {
 		}))
 		u, _ := url.Parse(bridgeServer.URL)
 		err := app.BridgeORM().CreateBridgeType(&bridges.BridgeType{
-			Name: bridges.TaskType("substrate-adapter1"),
+			Name: bridges.BridgeName("substrate-adapter1"),
 			URL:  models.WebURL(*u),
 		})
 		require.NoError(t, err)
@@ -209,7 +212,7 @@ observationSource   = """
 		headers[static.ExternalInitiatorAccessKeyHeader] = eiaWrong.AccessKey
 		headers[static.ExternalInitiatorSecretHeader] = eiaWrong.Secret
 
-		url := app.Config.ClientNodeURL() + "/v2/jobs/" + jobUUID.String() + "/runs"
+		url := app.Server.URL + "/v2/jobs/" + jobUUID.String() + "/runs"
 		bodyBuf := bytes.NewBufferString(body)
 		resp, cleanup := cltest.UnauthenticatedPost(t, url, bodyBuf, headers)
 		defer cleanup()
@@ -225,7 +228,7 @@ observationSource   = """
 		_ = cltest.CreateJobRunViaExternalInitiatorV2(t, app, jobUUID, *eia, cltest.MustJSONMarshal(t, eiRequest))
 
 		pipelineORM := pipeline.NewORM(app.GetSqlxDB(), logger.TestLogger(t), cfg)
-		jobORM := job.NewORM(app.GetSqlxDB(), app.GetChainSet(), pipelineORM, app.KeyStore, logger.TestLogger(t), cfg)
+		jobORM := job.NewORM(app.GetSqlxDB(), app.GetChains().EVM, pipelineORM, app.KeyStore, logger.TestLogger(t), cfg)
 
 		runs := cltest.WaitForPipelineComplete(t, 0, jobID, 1, 2, jobORM, 5*time.Second, 300*time.Millisecond)
 		require.Len(t, runs, 1)
@@ -247,10 +250,10 @@ observationSource   = """
 func TestIntegration_AuthToken(t *testing.T) {
 	t.Parallel()
 
-	ethClient, _, assertMockCalls := cltest.NewEthMocksWithStartupAssertions(t)
-	defer assertMockCalls()
+	ethClient := cltest.NewEthMocksWithStartupAssertions(t)
+
 	app := cltest.NewApplication(t, ethClient)
-	require.NoError(t, app.Start())
+	require.NoError(t, app.Start(testutils.Context(t)))
 
 	// set up user
 	mockUser := cltest.MustRandomUser(t)
@@ -259,7 +262,7 @@ func TestIntegration_AuthToken(t *testing.T) {
 	require.NoError(t, orm.CreateUser(&mockUser))
 	require.NoError(t, orm.SetAuthToken(&mockUser, &apiToken))
 
-	url := app.Config.ClientNodeURL() + "/v2/config"
+	url := app.Server.URL + "/v2/config"
 	headers := make(map[string]string)
 	headers[webauth.APIKey] = cltest.APIKey
 	headers[webauth.APISecret] = cltest.APISecret
@@ -275,6 +278,7 @@ type OperatorContracts struct {
 	multiWordConsumerAddress  common.Address
 	singleWordConsumerAddress common.Address
 	operatorAddress           common.Address
+	linkTokenAddress          common.Address
 	linkToken                 *link_token_interface.LinkToken
 	multiWord                 *multiwordconsumer_wrapper.MultiWordConsumer
 	singleWord                *consumer_wrapper.Consumer
@@ -320,6 +324,7 @@ func setupOperatorContracts(t *testing.T) OperatorContracts {
 		multiWordConsumerAddress:  multiWordConsumerAddress,
 		singleWordConsumerAddress: singleConsumerAddress,
 		linkToken:                 linkContract,
+		linkTokenAddress:          linkTokenAddress,
 		multiWord:                 multiWordConsumerContract,
 		singleWord:                singleConsumerContract,
 		operator:                  operatorContract,
@@ -352,7 +357,7 @@ func TestIntegration_DirectRequest(t *testing.T) {
 			b := operatorContracts.sim
 			app := cltest.NewApplicationWithConfigAndKeyOnSimulatedBlockchain(t, config, b)
 
-			sendingKeys, err := app.KeyStore.Eth().SendingKeys()
+			sendingKeys, err := app.KeyStore.Eth().SendingKeys(nil)
 			require.NoError(t, err)
 			authorizedSenders := []common.Address{sendingKeys[0].Address.Address()}
 			tx, err := operatorContracts.operator.SetAuthorizedSenders(operatorContracts.user, authorizedSenders)
@@ -370,7 +375,7 @@ func TestIntegration_DirectRequest(t *testing.T) {
 			require.NoError(t, err)
 			b.Commit()
 
-			err = app.Start()
+			err = app.Start(testutils.Context(t))
 			require.NoError(t, err)
 
 			mockServerUSD := cltest.NewHTTPMockServer(t, 200, "GET", `{"USD": 614.64}`)
@@ -410,7 +415,7 @@ func TestIntegration_DirectRequest(t *testing.T) {
 			})
 			defer stopBlocks()
 
-			pipelineRuns := cltest.WaitForPipelineComplete(t, 0, j.ID, 1, 14, app.JobORM(), 10*time.Second, 100*time.Millisecond)
+			pipelineRuns := cltest.WaitForPipelineComplete(t, 0, j.ID, 1, 14, app.JobORM(), testutils.WaitTimeout(t)/2, 100*time.Millisecond)
 			pipelineRun := pipelineRuns[0]
 			cltest.AssertPipelineTaskRunsSuccessful(t, pipelineRun.PipelineTaskRuns)
 			assertPricesUint256(t, big.NewInt(61464), big.NewInt(50707), big.NewInt(6381886), operatorContracts.multiWord)
@@ -437,7 +442,7 @@ func TestIntegration_DirectRequest(t *testing.T) {
 			b.Commit()
 			cltest.RequireTxSuccessful(t, b, tx.Hash())
 
-			pipelineRuns = cltest.WaitForPipelineComplete(t, 0, jobSingleWord.ID, 1, 8, app.JobORM(), 5*time.Second, 100*time.Millisecond)
+			pipelineRuns = cltest.WaitForPipelineComplete(t, 0, jobSingleWord.ID, 1, 8, app.JobORM(), testutils.WaitTimeout(t), 100*time.Millisecond)
 			pipelineRun = pipelineRuns[0]
 			cltest.AssertPipelineTaskRunsSuccessful(t, pipelineRun.PipelineTaskRuns)
 			v, err := operatorContracts.singleWord.CurrentPriceInt(nil)
@@ -445,6 +450,168 @@ func TestIntegration_DirectRequest(t *testing.T) {
 			assert.Equal(t, big.NewInt(61464), v)
 		})
 	}
+}
+
+func setupAppForEthTx(t *testing.T, cfg *configtest.TestGeneralConfig, operatorContracts OperatorContracts) (app *cltest.TestApplication, sendingAddress common.Address, o *observer.ObservedLogs) {
+	b := operatorContracts.sim
+	lggr, o := logger.TestLoggerObserved(t, zapcore.DebugLevel)
+	app = cltest.NewApplicationWithConfigAndKeyOnSimulatedBlockchain(t, cfg, b, lggr)
+	b.Commit()
+
+	sendingKeys, err := app.KeyStore.Eth().SendingKeys(nil)
+	require.NoError(t, err)
+
+	// Fund node account with ETH.
+	n, err := b.NonceAt(context.Background(), operatorContracts.user.From, nil)
+	require.NoError(t, err)
+	tx := types.NewTransaction(n, sendingKeys[0].Address.Address(), assets.Ether(100), 21000, big.NewInt(1000000000), nil)
+	signedTx, err := operatorContracts.user.Signer(operatorContracts.user.From, tx)
+	require.NoError(t, err)
+	err = b.SendTransaction(context.Background(), signedTx)
+	require.NoError(t, err)
+	b.Commit()
+
+	err = app.Start(testutils.Context(t))
+	require.NoError(t, err)
+
+	testutils.WaitForLogMessage(t, o, "Subscribing to new heads on chain 1337")
+	testutils.WaitForLogMessage(t, o, "Subscribed to heads on chain 1337")
+
+	return app, sendingKeys[0].Address.Address(), o
+}
+
+func TestIntegration_AsyncEthTx(t *testing.T) {
+	cfg := cltest.NewTestGeneralConfig(t)
+	cfg.Overrides.SetTriggerFallbackDBPollInterval(100 * time.Millisecond)
+	operatorContracts := setupOperatorContracts(t)
+	b := operatorContracts.sim
+
+	t.Run("with FailOnRevert enabled, run succeeds when transaction is successful", func(t *testing.T) {
+		app, sendingAddr, o := setupAppForEthTx(t, cfg, operatorContracts)
+		tomlSpec := `
+type            = "webhook"
+schemaVersion   = 1
+observationSource   = """
+	submit_tx  [type=ethtx to="%s"
+            data="%s"
+            minConfirmations="2"
+			failOnRevert=false
+            from="[\\"%s\\"]"
+			]
+"""
+`
+		// This succeeds for whatever reason
+		revertingData := "0xdeadbeef"
+		tomlSpec = fmt.Sprintf(tomlSpec, operatorContracts.linkTokenAddress.String(), revertingData, sendingAddr)
+		j := cltest.CreateJobViaWeb(t, app, []byte(cltest.MustJSONMarshal(t, web.CreateJobRequest{TOML: tomlSpec})))
+		cltest.AwaitJobActive(t, app.JobSpawner(), j.ID, testutils.WaitTimeout(t))
+
+		run := cltest.CreateJobRunViaUser(t, app, j.ExternalJobID, "")
+		assert.Equal(t, []*string([]*string(nil)), run.Outputs)
+		assert.Equal(t, []*string([]*string(nil)), run.Errors)
+
+		testutils.WaitForLogMessage(t, o, "Sent transaction")
+		b.Commit() // Needs at least two confirmations
+		b.Commit() // Needs at least two confirmations
+		b.Commit() // Needs at least two confirmations
+		testutils.WaitForLogMessage(t, o, "Resume run success")
+
+		pipelineRuns := cltest.WaitForPipelineComplete(t, 0, j.ID, 1, 1, app.JobORM(), testutils.WaitTimeout(t), 100*time.Millisecond)
+
+		// The run should have succeeded but with the receipt detailing the reverted transaction
+		pipelineRun := pipelineRuns[0]
+		cltest.AssertPipelineTaskRunsSuccessful(t, pipelineRun.PipelineTaskRuns)
+
+		outputs := pipelineRun.Outputs.Val.([]interface{})
+		require.Len(t, outputs, 1)
+		output := outputs[0]
+		receipt := output.(map[string]interface{})
+		assert.Equal(t, "0x7", receipt["blockNumber"])
+		assert.Equal(t, "0x538f", receipt["gasUsed"])
+		assert.Equal(t, "0x0", receipt["status"]) // success
+	})
+
+	t.Run("with FailOnRevert enabled, run fails with transaction reverted error", func(t *testing.T) {
+		app, sendingAddr, o := setupAppForEthTx(t, cfg, operatorContracts)
+		tomlSpec := `
+type            = "webhook"
+schemaVersion   = 1
+observationSource   = """
+	submit_tx  [type=ethtx to="%s"
+            data="%s"
+            minConfirmations="2"
+			failOnRevert=true
+            from="[\\"%s\\"]"
+			]
+"""
+`
+		// This data is a call to link token's `transfer` function and will revert due to insufficient LINK on the sender address
+		revertingData := "0xa9059cbb000000000000000000000000526485b5abdd8ae9c6a63548e0215a83e7135e6100000000000000000000000000000000000000000000000db069932ea4fe1400"
+		tomlSpec = fmt.Sprintf(tomlSpec, operatorContracts.linkTokenAddress.String(), revertingData, sendingAddr)
+		j := cltest.CreateJobViaWeb(t, app, []byte(cltest.MustJSONMarshal(t, web.CreateJobRequest{TOML: tomlSpec})))
+		cltest.AwaitJobActive(t, app.JobSpawner(), j.ID, testutils.WaitTimeout(t))
+
+		run := cltest.CreateJobRunViaUser(t, app, j.ExternalJobID, "")
+		assert.Equal(t, []*string([]*string(nil)), run.Outputs)
+		assert.Equal(t, []*string([]*string(nil)), run.Errors)
+
+		testutils.WaitForLogMessage(t, o, "Sent transaction")
+		b.Commit() // Needs at least two confirmations
+		b.Commit() // Needs at least two confirmations
+		b.Commit() // Needs at least two confirmations
+		testutils.WaitForLogMessage(t, o, "Resume run success")
+
+		pipelineRuns := cltest.WaitForPipelineError(t, 0, j.ID, 1, 1, app.JobORM(), testutils.WaitTimeout(t), 100*time.Millisecond)
+
+		// The run should have failed as a revert
+		pipelineRun := pipelineRuns[0]
+		cltest.AssertPipelineTaskRunsErrored(t, pipelineRun.PipelineTaskRuns)
+	})
+
+	t.Run("with FailOnRevert disabled, run succeeds with output being reverted receipt", func(t *testing.T) {
+		app, sendingAddr, o := setupAppForEthTx(t, cfg, operatorContracts)
+		tomlSpec := `
+type            = "webhook"
+schemaVersion   = 1
+observationSource   = """
+	submit_tx  [type=ethtx to="%s"
+            data="%s"
+            minConfirmations="2"
+			failOnRevert=false
+            from="[\\"%s\\"]"
+			]
+"""
+`
+		// This data is a call to link token's `transfer` function and will revert due to insufficient LINK on the sender address
+		revertingData := "0xa9059cbb000000000000000000000000526485b5abdd8ae9c6a63548e0215a83e7135e6100000000000000000000000000000000000000000000000db069932ea4fe1400"
+		tomlSpec = fmt.Sprintf(tomlSpec, operatorContracts.linkTokenAddress.String(), revertingData, sendingAddr)
+		j := cltest.CreateJobViaWeb(t, app, []byte(cltest.MustJSONMarshal(t, web.CreateJobRequest{TOML: tomlSpec})))
+		cltest.AwaitJobActive(t, app.JobSpawner(), j.ID, testutils.WaitTimeout(t))
+
+		run := cltest.CreateJobRunViaUser(t, app, j.ExternalJobID, "")
+		assert.Equal(t, []*string([]*string(nil)), run.Outputs)
+		assert.Equal(t, []*string([]*string(nil)), run.Errors)
+
+		testutils.WaitForLogMessage(t, o, "Sent transaction")
+		b.Commit() // Needs at least two confirmations
+		b.Commit() // Needs at least two confirmations
+		b.Commit() // Needs at least two confirmations
+		testutils.WaitForLogMessage(t, o, "Resume run success")
+
+		pipelineRuns := cltest.WaitForPipelineComplete(t, 0, j.ID, 1, 1, app.JobORM(), testutils.WaitTimeout(t), 100*time.Millisecond)
+
+		// The run should have succeeded but with the receipt detailing the reverted transaction
+		pipelineRun := pipelineRuns[0]
+		cltest.AssertPipelineTaskRunsSuccessful(t, pipelineRun.PipelineTaskRuns)
+
+		outputs := pipelineRun.Outputs.Val.([]interface{})
+		require.Len(t, outputs, 1)
+		output := outputs[0]
+		receipt := output.(map[string]interface{})
+		assert.Equal(t, "0x11", receipt["blockNumber"])
+		assert.Equal(t, "0x7a120", receipt["gasUsed"])
+		assert.Equal(t, "0x0", receipt["status"])
+	})
 }
 
 func setupOCRContracts(t *testing.T) (*bind.TransactOpts, *backends.SimulatedBackend, common.Address, *offchainaggregator.OffchainAggregator, *flags_wrapper.Flags, common.Address) {
@@ -494,7 +661,11 @@ func setupOCRContracts(t *testing.T) (*bind.TransactOpts, *backends.SimulatedBac
 }
 
 func setupNode(t *testing.T, owner *bind.TransactOpts, portV1, portV2 int, dbName string, b *backends.SimulatedBackend, ns ocrnetworking.NetworkingStack) (*cltest.TestApplication, string, common.Address, ocrkey.KeyV2, *configtest.TestGeneralConfig) {
-	config, _ := heavyweight.FullTestDB(t, fmt.Sprintf("%s%d", dbName, portV1), true, true)
+	config, _ := heavyweight.FullTestDB(t, fmt.Sprintf("%s%d", dbName, portV1))
+	config.Overrides.Dev = null.BoolFrom(true) // Disables ocr spec validation so we can have fast polling for the test.
+	config.Overrides.FeatureOffchainReporting = null.BoolFrom(true)
+	config.Overrides.FeatureOffchainReporting2 = null.BoolFrom(true)
+	config.Overrides.P2PEnabled = null.BoolFrom(true)
 
 	app := cltest.NewApplicationWithConfigAndKeyOnSimulatedBlockchain(t, config, b)
 	_, err := app.GetKeyStore().P2P().Create()
@@ -505,7 +676,6 @@ func setupNode(t *testing.T, owner *bind.TransactOpts, portV1, portV2 int, dbNam
 	peerID := p2pIDs[0].PeerID()
 
 	config.Overrides.P2PPeerID = peerID
-	config.Overrides.Dev = null.BoolFrom(true) // Disables ocr spec validation so we can have fast polling for the test.
 	config.Overrides.P2PNetworkingStack = ns
 	// We want to quickly poll for the bootstrap node to come up, but if we poll too quickly
 	// we'll flood it with messages and slow things down. 5s is about how long it takes the
@@ -528,7 +698,7 @@ func setupNode(t *testing.T, owner *bind.TransactOpts, portV1, portV2 int, dbNam
 		config.Overrides.P2PV2ListenAddresses = []string{fmt.Sprintf("127.0.0.1:%d", portV2)}
 	}
 
-	sendingKeys, err := app.KeyStore.Eth().SendingKeys()
+	sendingKeys, err := app.KeyStore.Eth().SendingKeys(nil)
 	require.NoError(t, err)
 	transmitter := sendingKeys[0].Address.Address()
 
@@ -549,9 +719,7 @@ func setupNode(t *testing.T, owner *bind.TransactOpts, portV1, portV2 int, dbNam
 }
 
 func TestIntegration_OCR(t *testing.T) {
-	if testing.Short() {
-		t.Skip()
-	}
+	testutils.SkipShort(t, "long test")
 	tests := []struct {
 		id        int
 		portStart int // Test need to run in parallel, all need distinct port ranges.
@@ -639,10 +807,10 @@ func TestIntegration_OCR(t *testing.T) {
 			require.NoError(t, err)
 			b.Commit()
 
-			err = appBootstrap.Start()
+			err = appBootstrap.Start(testutils.Context(t))
 			require.NoError(t, err)
 
-			jb, err := offchainreporting.ValidatedOracleSpecToml(appBootstrap.GetChainSet(), fmt.Sprintf(`
+			jb, err := ocr.ValidatedOracleSpecToml(appBootstrap.GetChains().EVM, fmt.Sprintf(`
 type               = "offchainreporting"
 schemaVersion      = 1
 name               = "boot"
@@ -675,7 +843,7 @@ isBootstrapPeer    = true
 				"0": {}, "10": {}, "20": {}, "30": {},
 			}
 			for i := 0; i < numOracles; i++ {
-				err = apps[i].Start()
+				err = apps[i].Start(testutils.Context(t))
 				require.NoError(t, err)
 
 				// Since this API speed is > ObservationTimeout we should ignore it and still produce values.
@@ -701,14 +869,14 @@ isBootstrapPeer    = true
 				defer servers[i].Close()
 				u, _ := url.Parse(servers[i].URL)
 				err := apps[i].BridgeORM().CreateBridgeType(&bridges.BridgeType{
-					Name: bridges.TaskType(fmt.Sprintf("bridge%d", i)),
+					Name: bridges.BridgeName(fmt.Sprintf("bridge%d", i)),
 					URL:  models.WebURL(*u),
 				})
 				require.NoError(t, err)
 
 				// Note we need: observationTimeout + observationGracePeriod + DeltaGrace (500ms) < DeltaRound (1s)
 				// So 200ms + 200ms + 500ms < 1s
-				jb, err := offchainreporting.ValidatedOracleSpecToml(apps[i].GetChainSet(), fmt.Sprintf(`
+				jb, err := ocr.ValidatedOracleSpecToml(apps[i].GetChains().EVM, fmt.Sprintf(`
 type               = "offchainreporting"
 schemaVersion      = 1
 name               = "web oracle spec"
@@ -753,7 +921,7 @@ observationSource = """
 					2, 7, apps[i].JobORM(), time.Minute, time.Second)
 				jb, err := pr[0].Outputs.MarshalJSON()
 				require.NoError(t, err)
-				assert.Equal(t, []byte(fmt.Sprintf("[\"%d\"]", 10*i)), jb)
+				assert.Equal(t, []byte(fmt.Sprintf("[\"%d\"]", 10*i)), jb, "pr[0] %+v pr[1] %+v", pr[0], pr[1])
 				require.NoError(t, err)
 			}
 
@@ -794,9 +962,8 @@ func TestIntegration_BlockHistoryEstimator(t *testing.T) {
 	cfg := cltest.NewTestGeneralConfig(t)
 	cfg.Overrides.GlobalBalanceMonitorEnabled = null.BoolFrom(false)
 
-	ethClient, sub, assertMocksCalled := cltest.NewEthMocksWithDefaultChain(t)
-	defer assertMocksCalled()
-	chchNewHeads := make(chan chan<- *eth.Head, 1)
+	ethClient := cltest.NewEthMocksWithDefaultChain(t)
+	chchNewHeads := make(chan evmtest.RawSub[*evmtypes.Head], 1)
 
 	db := pgtest.NewSqlxDB(t)
 	kst := cltest.NewKeyStore(t, db, cfg)
@@ -827,16 +994,20 @@ func TestIntegration_BlockHistoryEstimator(t *testing.T) {
 	}
 
 	evmChainID := utils.NewBig(cfg.DefaultChainID())
-	h40 := eth.Head{Hash: utils.NewHash(), Number: 40, EVMChainID: evmChainID}
-	h41 := eth.Head{Hash: b41.Hash, ParentHash: h40.Hash, Number: 41, EVMChainID: evmChainID}
-	h42 := eth.Head{Hash: b42.Hash, ParentHash: h41.Hash, Number: 42, EVMChainID: evmChainID}
+	h40 := evmtypes.Head{Hash: utils.NewHash(), Number: 40, EVMChainID: evmChainID}
+	h41 := evmtypes.Head{Hash: b41.Hash, ParentHash: h40.Hash, Number: 41, EVMChainID: evmChainID}
+	h42 := evmtypes.Head{Hash: b42.Hash, ParentHash: h41.Hash, Number: 42, EVMChainID: evmChainID}
 
-	sub.On("Err").Return(nil)
-	sub.On("Unsubscribe").Return(nil).Maybe()
-
+	mockEth := &evmtest.MockEth{EthClient: ethClient}
 	ethClient.On("SubscribeNewHead", mock.Anything, mock.Anything).
-		Run(func(args mock.Arguments) { chchNewHeads <- args.Get(1).(chan<- *eth.Head) }).
-		Return(sub, nil)
+		Return(
+			func(ctx context.Context, ch chan<- *evmtypes.Head) ethereum.Subscription {
+				sub := mockEth.NewSub(t)
+				chchNewHeads <- evmtest.NewRawSub(ch, sub.Err())
+				return sub
+			},
+			func(ctx context.Context, ch chan<- *evmtypes.Head) error { return nil },
+		)
 	// Nonce syncer
 	ethClient.On("PendingNonceAt", mock.Anything, mock.Anything).Maybe().Return(uint64(0), nil)
 
@@ -844,20 +1015,20 @@ func TestIntegration_BlockHistoryEstimator(t *testing.T) {
 	ethClient.On("HeadByNumber", mock.Anything, mock.AnythingOfType("*big.Int")).Return(&h42, nil)
 	ethClient.On("BatchCallContext", mock.Anything, mock.MatchedBy(func(b []rpc.BatchElem) bool {
 		return len(b) == 2 &&
-			b[0].Method == "eth_getBlockByNumber" && b[0].Args[0] == "0x29" &&
-			b[1].Method == "eth_getBlockByNumber" && b[1].Args[0] == "0x2a"
+			b[0].Method == "eth_getBlockByNumber" && b[0].Args[0] == "0x2a" &&
+			b[1].Method == "eth_getBlockByNumber" && b[1].Args[0] == "0x29"
 	})).Return(nil).Run(func(args mock.Arguments) {
 		elems := args.Get(1).([]rpc.BatchElem)
-		elems[0].Result = &b41
-		elems[1].Result = &b42
+		elems[0].Result = &b42
+		elems[1].Result = &b41
 	})
 
 	ethClient.On("Dial", mock.Anything).Return(nil)
 	ethClient.On("ChainID", mock.Anything).Return(cfg.DefaultChainID(), nil)
 	ethClient.On("BalanceAt", mock.Anything, mock.Anything, mock.Anything).Maybe().Return(oneETH.ToInt(), nil)
 
-	require.NoError(t, cc.Start())
-	var newHeads chan<- *eth.Head
+	require.NoError(t, cc.Start(testutils.Context(t)))
+	var newHeads evmtest.RawSub[*evmtypes.Head]
 	select {
 	case newHeads = <-chchNewHeads:
 	case <-time.After(10 * time.Second):
@@ -885,7 +1056,7 @@ func TestIntegration_BlockHistoryEstimator(t *testing.T) {
 	ethClient.On("HeadByNumber", mock.Anything, big.NewInt(41)).Return(&h41, nil)
 
 	// Simulate one new head and check the gas price got updated
-	newHeads <- cltest.Head(43)
+	newHeads.TrySend(cltest.Head(43))
 
 	gomega.NewWithT(t).Eventually(func() string {
 		gasPrice, _, err := estimator.GetLegacyGas(nil, 500000)
@@ -895,10 +1066,10 @@ func TestIntegration_BlockHistoryEstimator(t *testing.T) {
 }
 
 func triggerAllKeys(t *testing.T, app *cltest.TestApplication) {
-	keys, err := app.KeyStore.Eth().SendingKeys()
+	keys, err := app.KeyStore.Eth().SendingKeys(nil)
 	require.NoError(t, err)
 	// FIXME: This is a hack. Remove after https://app.clubhouse.io/chainlinklabs/story/15103/use-in-memory-event-broadcaster-instead-of-postgres-event-broadcaster-in-transactional-tests-so-it-actually-works
-	for _, chain := range app.GetChainSet().Chains() {
+	for _, chain := range app.GetChains().EVM.Chains() {
 		for _, k := range keys {
 			chain.TxManager().Trigger(k.Address.Address())
 		}

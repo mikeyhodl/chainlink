@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/pkg/errors"
+
 	"github.com/smartcontractkit/chainlink/core/services/chainlink"
 	"github.com/smartcontractkit/chainlink/core/utils"
 )
@@ -23,6 +24,17 @@ func (bdc *ReplayController) ReplayFromBlock(c *gin.Context) {
 		return
 	}
 
+	// check if "force" query string parameter provided
+	var force bool
+	var err error
+	if fb := c.Query("force"); fb != "" {
+		force, err = strconv.ParseBool(fb)
+		if err != nil {
+			jsonAPIError(c, http.StatusUnprocessableEntity, errors.Wrap(err, "boolean value required for 'force' query string param"))
+			return
+		}
+	}
+
 	blockNumber, err := strconv.ParseInt(c.Param("number"), 10, 0)
 	if err != nil {
 		jsonAPIError(c, http.StatusUnprocessableEntity, err)
@@ -33,7 +45,7 @@ func (bdc *ReplayController) ReplayFromBlock(c *gin.Context) {
 		return
 	}
 
-	chain, err := getChain(bdc.App.GetChainSet(), c.Query("evmChainID"))
+	chain, err := getChain(bdc.App.GetChains().EVM, c.Query("evmChainID"))
 	switch err {
 	case ErrInvalidChainID, ErrMultipleChains, ErrMissingChainID:
 		jsonAPIError(c, http.StatusUnprocessableEntity, err)
@@ -46,7 +58,7 @@ func (bdc *ReplayController) ReplayFromBlock(c *gin.Context) {
 	}
 	chainID := chain.ID()
 
-	if err := bdc.App.ReplayFromBlock(chainID, uint64(blockNumber)); err != nil {
+	if err := bdc.App.ReplayFromBlock(chainID, uint64(blockNumber), force); err != nil {
 		jsonAPIError(c, http.StatusInternalServerError, err)
 		return
 	}

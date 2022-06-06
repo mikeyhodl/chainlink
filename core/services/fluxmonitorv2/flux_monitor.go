@@ -13,19 +13,20 @@ import (
 	"github.com/pkg/errors"
 	"github.com/shopspring/decimal"
 
+	"github.com/smartcontractkit/sqlx"
+
 	"github.com/smartcontractkit/chainlink/core/bridges"
+	evmclient "github.com/smartcontractkit/chainlink/core/chains/evm/client"
+	"github.com/smartcontractkit/chainlink/core/chains/evm/log"
 	"github.com/smartcontractkit/chainlink/core/internal/gethwrappers/generated/flags_wrapper"
 	"github.com/smartcontractkit/chainlink/core/internal/gethwrappers/generated/flux_aggregator_wrapper"
 	"github.com/smartcontractkit/chainlink/core/logger"
 	"github.com/smartcontractkit/chainlink/core/recovery"
-	"github.com/smartcontractkit/chainlink/core/services/eth"
 	"github.com/smartcontractkit/chainlink/core/services/fluxmonitorv2/promfm"
 	"github.com/smartcontractkit/chainlink/core/services/job"
-	"github.com/smartcontractkit/chainlink/core/services/log"
 	"github.com/smartcontractkit/chainlink/core/services/pg"
 	"github.com/smartcontractkit/chainlink/core/services/pipeline"
 	"github.com/smartcontractkit/chainlink/core/utils"
-	"github.com/smartcontractkit/sqlx"
 )
 
 // PollRequest defines a request to initiate a poll
@@ -49,7 +50,8 @@ const (
 	PollRequestTypeDrumbeat
 )
 
-const DefaultHibernationPollPeriod = 168 * time.Hour
+// DefaultHibernationPollPeriod defines the hibernation polling period
+const DefaultHibernationPollPeriod = 24 * time.Hour
 
 // FluxMonitor polls external price adapters via HTTP to check for price swings.
 type FluxMonitor struct {
@@ -74,7 +76,7 @@ type FluxMonitor struct {
 
 	logger logger.Logger
 
-	backlog       *utils.BoundedPriorityQueue
+	backlog       *utils.BoundedPriorityQueue[log.Broadcast]
 	chProcessLogs chan struct{}
 
 	utils.StartStopOnce
@@ -122,7 +124,7 @@ func NewFluxMonitor(
 		logBroadcaster:    logBroadcaster,
 		fluxAggregator:    fluxAggregator,
 		logger:            fmLogger,
-		backlog: utils.NewBoundedPriorityQueue(map[uint]uint{
+		backlog: utils.NewBoundedPriorityQueue[log.Broadcast](map[uint]int{
 			// We want reconnecting nodes to be able to submit to a round
 			// that hasn't hit maxAnswers yet, as well as the newest round.
 			PriorityNewRoundLog:      2,
@@ -147,7 +149,7 @@ func NewFromJobSpec(
 	jobORM job.ORM,
 	pipelineORM pipeline.ORM,
 	keyStore KeyStoreInterface,
-	ethClient eth.Client,
+	ethClient evmclient.Client,
 	logBroadcaster log.Broadcaster,
 	pipelineRunner pipeline.Runner,
 	cfg Config,
@@ -263,7 +265,7 @@ const (
 
 // Start implements the job.Service interface. It begins the CSP consumer in a
 // single goroutine to poll the price adapters and listen to NewRound events.
-func (fm *FluxMonitor) Start() error {
+func (fm *FluxMonitor) Start(context.Context) error {
 	return fm.StartOnce("FluxMonitor", func() error {
 		fm.logger.Debug("Starting Flux Monitor for job")
 
@@ -307,8 +309,7 @@ func (fm *FluxMonitor) JobID() int32 { return fm.spec.JobID }
 func (fm *FluxMonitor) HandleLog(broadcast log.Broadcast) {
 	log := broadcast.DecodedLog()
 	if log == nil || reflect.ValueOf(log).IsNil() {
-		fm.logger.Error("HandleLog: ignoring nil value")
-		return
+		fm.logger.Panic("HandleLog: failed to handle log of type nil")
 	}
 
 	switch log := log.(type) {
@@ -451,7 +452,7 @@ func (fm *FluxMonitor) SetOracleAddress() error {
 		fm.logger.Error("failed to get list of oracles from FluxAggregator contract")
 		return errors.Wrap(err, "failed to get list of oracles from FluxAggregator contract")
 	}
-	keys, err := fm.keyStore.SendingKeys()
+	keys, err := fm.keyStore.SendingKeys(nil) // FIXME: FluxMonitor is probably not compatible with multichain here
 	if err != nil {
 		return errors.Wrap(err, "failed to load keys")
 	}
@@ -485,11 +486,7 @@ func (fm *FluxMonitor) SetOracleAddress() error {
 
 func (fm *FluxMonitor) processLogs() {
 	for !fm.backlog.Empty() {
-		maybeBroadcast := fm.backlog.Take()
-		broadcast, ok := maybeBroadcast.(log.Broadcast)
-		if !ok {
-			fm.logger.Errorf("Failed to convert backlog into LogBroadcast.  Type is %T", maybeBroadcast)
-		}
+		broadcast := fm.backlog.Take()
 		fm.processBroadcast(broadcast)
 	}
 }
@@ -757,7 +754,7 @@ func (fm *FluxMonitor) respondToNewRoundLog(log flux_aggregator_wrapper.FluxAggr
 		if err2 := fm.runner.InsertFinishedRun(&run, false, pg.WithQueryer(tx)); err2 != nil {
 			return err2
 		}
-		if err2 := fm.queueTransactionForBPTXM(tx, run.ID, answer, roundState.RoundId, &log); err2 != nil {
+		if err2 := fm.queueTransactionForTxm(tx, run.ID, answer, roundState.RoundId, &log); err2 != nil {
 			return err2
 		}
 		return fm.logBroadcaster.MarkConsumed(lb, pg.WithQueryer(tx))
@@ -980,7 +977,7 @@ func (fm *FluxMonitor) pollIfEligible(pollReq PollRequestType, deviationChecker 
 		if err2 := fm.runner.InsertFinishedRun(&run, true, pg.WithQueryer(tx)); err2 != nil {
 			return err2
 		}
-		if err2 := fm.queueTransactionForBPTXM(tx, run.ID, answer, roundState.RoundId, nil); err2 != nil {
+		if err2 := fm.queueTransactionForTxm(tx, run.ID, answer, roundState.RoundId, nil); err2 != nil {
 			return err2
 		}
 		if broadcast != nil {
@@ -1056,7 +1053,7 @@ func (fm *FluxMonitor) initialRoundState() flux_aggregator_wrapper.OracleRoundSt
 	return latestRoundState
 }
 
-func (fm *FluxMonitor) queueTransactionForBPTXM(tx pg.Queryer, runID int64, answer decimal.Decimal, roundID uint32, log *flux_aggregator_wrapper.FluxAggregatorNewRound) error {
+func (fm *FluxMonitor) queueTransactionForTxm(tx pg.Queryer, runID int64, answer decimal.Decimal, roundID uint32, log *flux_aggregator_wrapper.FluxAggregatorNewRound) error {
 	// Submit the Eth Tx
 	err := fm.contractSubmitter.Submit(
 		new(big.Int).SetInt64(int64(roundID)),

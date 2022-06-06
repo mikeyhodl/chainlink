@@ -10,11 +10,12 @@ import (
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
-	"github.com/smartcontractkit/chainlink/core/logger"
-	"github.com/smartcontractkit/chainlink/core/services/eth"
-	"github.com/smartcontractkit/chainlink/core/utils"
 	"go.uber.org/multierr"
 	"gopkg.in/guregu/null.v4"
+
+	evmtypes "github.com/smartcontractkit/chainlink/core/chains/evm/types"
+	"github.com/smartcontractkit/chainlink/core/logger"
+	"github.com/smartcontractkit/chainlink/core/utils"
 )
 
 //go:generate mockery --name PrometheusBackend --output ../../internal/mocks/ --case=underscore
@@ -23,7 +24,7 @@ type (
 		db           *sql.DB
 		lggr         logger.Logger
 		backend      PrometheusBackend
-		newHeads     *utils.Mailbox
+		newHeads     *utils.Mailbox[*evmtypes.Head]
 		chStop       chan struct{}
 		wgDone       sync.WaitGroup
 		reportPeriod time.Duration
@@ -102,13 +103,14 @@ func NewPromReporter(db *sql.DB, lggr logger.Logger, opts ...interface{}) *promR
 		db:           db,
 		lggr:         lggr.Named("PromReporter"),
 		backend:      backend,
-		newHeads:     utils.NewMailbox(1),
+		newHeads:     utils.NewMailbox[*evmtypes.Head](1),
 		chStop:       chStop,
 		reportPeriod: period,
 	}
 }
 
-func (pr *promReporter) Start() error {
+// Start starts PromReporter.
+func (pr *promReporter) Start(context.Context) error {
 	return pr.StartOnce("PromReporter", func() error {
 		pr.wgDone.Add(1)
 		go pr.eventLoop()
@@ -124,7 +126,7 @@ func (pr *promReporter) Close() error {
 	})
 }
 
-func (pr *promReporter) OnNewLongestChain(ctx context.Context, head *eth.Head) {
+func (pr *promReporter) OnNewLongestChain(ctx context.Context, head *evmtypes.Head) {
 	pr.newHeads.Deliver(head)
 }
 
@@ -136,11 +138,10 @@ func (pr *promReporter) eventLoop() {
 	for {
 		select {
 		case <-pr.newHeads.Notify():
-			item, exists := pr.newHeads.Retrieve()
+			head, exists := pr.newHeads.Retrieve()
 			if !exists {
 				continue
 			}
-			head := eth.AsHead(item)
 			pr.reportHeadMetrics(ctx, head)
 		case <-time.After(pr.reportPeriod):
 			if err := errors.Wrap(pr.reportPipelineRunStats(ctx), "reportPipelineRunStats failed"); err != nil {
@@ -153,7 +154,7 @@ func (pr *promReporter) eventLoop() {
 	}
 }
 
-func (pr *promReporter) reportHeadMetrics(ctx context.Context, head *eth.Head) {
+func (pr *promReporter) reportHeadMetrics(ctx context.Context, head *evmtypes.Head) {
 	evmChainID := head.EVMChainID.ToInt()
 	err := multierr.Combine(
 		errors.Wrap(pr.reportPendingEthTxes(ctx, evmChainID), "reportPendingEthTxes failed"),
@@ -178,7 +179,7 @@ func (pr *promReporter) reportPendingEthTxes(ctx context.Context, evmChainID *bi
 func (pr *promReporter) reportMaxUnconfirmedAge(ctx context.Context, evmChainID *big.Int) (err error) {
 	var broadcastAt null.Time
 	now := time.Now()
-	if err := pr.db.QueryRowContext(ctx, `SELECT min(broadcast_at) FROM eth_txes WHERE state = 'unconfirmed' AND evm_chain_id = $1`, evmChainID.String()).Scan(&broadcastAt); err != nil {
+	if err := pr.db.QueryRowContext(ctx, `SELECT min(initial_broadcast_at) FROM eth_txes WHERE state = 'unconfirmed' AND evm_chain_id = $1`, evmChainID.String()).Scan(&broadcastAt); err != nil {
 		return errors.Wrap(err, "failed to query for unconfirmed eth_tx count")
 	}
 	var seconds float64
@@ -190,7 +191,7 @@ func (pr *promReporter) reportMaxUnconfirmedAge(ctx context.Context, evmChainID 
 	return nil
 }
 
-func (pr *promReporter) reportMaxUnconfirmedBlocks(ctx context.Context, head *eth.Head) (err error) {
+func (pr *promReporter) reportMaxUnconfirmedBlocks(ctx context.Context, head *evmtypes.Head) (err error) {
 	var earliestUnconfirmedTxBlock null.Int
 	err = pr.db.QueryRowContext(ctx, `
 SELECT MIN(broadcast_before_block_num) FROM eth_tx_attempts

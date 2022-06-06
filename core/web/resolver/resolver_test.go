@@ -13,14 +13,13 @@ import (
 	bridgeORMMocks "github.com/smartcontractkit/chainlink/core/bridges/mocks"
 	evmConfigMocks "github.com/smartcontractkit/chainlink/core/chains/evm/config/mocks"
 	evmORMMocks "github.com/smartcontractkit/chainlink/core/chains/evm/mocks"
+	txmgrMocks "github.com/smartcontractkit/chainlink/core/chains/evm/txmgr/mocks"
 	configMocks "github.com/smartcontractkit/chainlink/core/config/mocks"
 	coremocks "github.com/smartcontractkit/chainlink/core/internal/mocks"
-	bulletprooftxmanagerMocks "github.com/smartcontractkit/chainlink/core/services/bulletprooftxmanager/mocks"
-	ethmocks "github.com/smartcontractkit/chainlink/core/services/eth/mocks"
+	"github.com/smartcontractkit/chainlink/core/internal/testutils/evmtest"
 	feedsMocks "github.com/smartcontractkit/chainlink/core/services/feeds/mocks"
 	jobORMMocks "github.com/smartcontractkit/chainlink/core/services/job/mocks"
 	keystoreMocks "github.com/smartcontractkit/chainlink/core/services/keystore/mocks"
-	servicesMocks "github.com/smartcontractkit/chainlink/core/services/mocks"
 	pipelineMocks "github.com/smartcontractkit/chainlink/core/services/pipeline/mocks"
 	webhookmocks "github.com/smartcontractkit/chainlink/core/services/webhook/mocks"
 	clsessions "github.com/smartcontractkit/chainlink/core/sessions"
@@ -32,7 +31,7 @@ import (
 
 type mocks struct {
 	bridgeORM   *bridgeORMMocks.ORM
-	evmORM      *evmORMMocks.ORM
+	evmORM      *evmtest.MockORM
 	jobORM      *jobORMMocks.ORM
 	sessionsORM *sessionsMocks.ORM
 	pipelineORM *pipelineMocks.ORM
@@ -40,6 +39,7 @@ type mocks struct {
 	cfg         *configMocks.GeneralConfig
 	scfg        *evmConfigMocks.ChainScopedConfig
 	ocr         *keystoreMocks.OCR
+	ocr2        *keystoreMocks.OCR2
 	csa         *keystoreMocks.CSA
 	keystore    *keystoreMocks.Master
 	ethKs       *keystoreMocks.Eth
@@ -48,10 +48,10 @@ type mocks struct {
 	solana      *keystoreMocks.Solana
 	chain       *evmORMMocks.Chain
 	chainSet    *evmORMMocks.ChainSet
-	ethClient   *ethmocks.Client
+	ethClient   *evmORMMocks.Client
 	eIMgr       *webhookmocks.ExternalInitiatorManager
-	balM        *servicesMocks.BalanceMonitor
-	bptxmORM    *bulletprooftxmanagerMocks.ORM
+	balM        *evmORMMocks.BalanceMonitor
+	txmORM      *txmgrMocks.ORM
 }
 
 // gqlTestFramework is a framework wrapper containing the objects needed to run
@@ -88,7 +88,7 @@ func setupFramework(t *testing.T) *gqlTestFramework {
 	// Note - If you add a new mock make sure you assert it's expectation below.
 	m := &mocks{
 		bridgeORM:   &bridgeORMMocks.ORM{},
-		evmORM:      &evmORMMocks.ORM{},
+		evmORM:      evmtest.NewMockORM(nil, nil),
 		jobORM:      &jobORMMocks.ORM{},
 		feedsSvc:    &feedsMocks.Service{},
 		sessionsORM: &sessionsMocks.ORM{},
@@ -96,6 +96,7 @@ func setupFramework(t *testing.T) *gqlTestFramework {
 		cfg:         &configMocks.GeneralConfig{},
 		scfg:        &evmConfigMocks.ChainScopedConfig{},
 		ocr:         &keystoreMocks.OCR{},
+		ocr2:        &keystoreMocks.OCR2{},
 		csa:         &keystoreMocks.CSA{},
 		keystore:    &keystoreMocks.Master{},
 		ethKs:       &keystoreMocks.Eth{},
@@ -104,10 +105,10 @@ func setupFramework(t *testing.T) *gqlTestFramework {
 		solana:      &keystoreMocks.Solana{},
 		chain:       &evmORMMocks.Chain{},
 		chainSet:    &evmORMMocks.ChainSet{},
-		ethClient:   &ethmocks.Client{},
+		ethClient:   &evmORMMocks.Client{},
 		eIMgr:       &webhookmocks.ExternalInitiatorManager{},
-		balM:        &servicesMocks.BalanceMonitor{},
-		bptxmORM:    &bulletprooftxmanagerMocks.ORM{},
+		balM:        &evmORMMocks.BalanceMonitor{},
+		txmORM:      &txmgrMocks.ORM{},
 	}
 
 	// Assert expectations for any mocks that we set up
@@ -115,7 +116,6 @@ func setupFramework(t *testing.T) *gqlTestFramework {
 		mock.AssertExpectationsForObjects(t,
 			app,
 			m.bridgeORM,
-			m.evmORM,
 			m.jobORM,
 			m.sessionsORM,
 			m.pipelineORM,
@@ -123,6 +123,7 @@ func setupFramework(t *testing.T) *gqlTestFramework {
 			m.cfg,
 			m.scfg,
 			m.ocr,
+			m.ocr2,
 			m.csa,
 			m.keystore,
 			m.ethKs,
@@ -134,7 +135,7 @@ func setupFramework(t *testing.T) *gqlTestFramework {
 			m.ethClient,
 			m.eIMgr,
 			m.balM,
-			m.bptxmORM,
+			m.txmORM,
 		)
 	})
 

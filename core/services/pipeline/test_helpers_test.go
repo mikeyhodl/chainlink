@@ -13,6 +13,7 @@ import (
 
 	"github.com/smartcontractkit/chainlink/core/internal/cltest"
 	"github.com/smartcontractkit/chainlink/core/services/pg"
+	"github.com/smartcontractkit/chainlink/core/services/pipeline"
 	"github.com/smartcontractkit/sqlx"
 )
 
@@ -28,7 +29,7 @@ func fakeExternalAdapter(t *testing.T, expectedRequest, response interface{}) ht
 		expectedBody := &bytes.Buffer{}
 		err = json.NewEncoder(expectedBody).Encode(expectedRequest)
 		require.NoError(t, err)
-		require.Equal(t, bytes.TrimSpace(expectedBody.Bytes()), body)
+		require.Equal(t, string(bytes.TrimSpace(expectedBody.Bytes())), string(body))
 
 		w.Header().Set("Content-Type", "application/json")
 		err = json.NewEncoder(w).Encode(response)
@@ -47,4 +48,12 @@ func makeBridge(t *testing.T, db *sqlx.DB, expectedRequest, response interface{}
 	_, bt := cltest.MustCreateBridge(t, db, cltest.BridgeOpts{URL: bridgeFeedURL.String()}, cfg)
 
 	return server, bt.Name.String()
+}
+
+func mustNewObjectParam(t *testing.T, val interface{}) *pipeline.ObjectParam {
+	var value pipeline.ObjectParam
+	if err := value.UnmarshalPipelineParam(val); err != nil {
+		t.Fatalf("failed to init ObjectParam from %v, err: %v", val, err)
+	}
+	return &value
 }

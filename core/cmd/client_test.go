@@ -6,6 +6,7 @@ import (
 
 	"github.com/smartcontractkit/chainlink/core/cmd"
 	"github.com/smartcontractkit/chainlink/core/internal/cltest"
+	"github.com/smartcontractkit/chainlink/core/internal/testutils"
 	"github.com/smartcontractkit/chainlink/core/internal/testutils/pgtest"
 	"github.com/smartcontractkit/chainlink/core/logger"
 	"github.com/smartcontractkit/chainlink/core/sessions"
@@ -13,11 +14,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-type cfg struct{}
-
-func (c cfg) ClientNodeURL() string    { return "" }
-func (c cfg) InsecureSkipVerify() bool { return false }
 
 func TestTerminalCookieAuthenticator_AuthenticateWithoutSession(t *testing.T) {
 	t.Parallel()
@@ -34,7 +30,7 @@ func TestTerminalCookieAuthenticator_AuthenticateWithoutSession(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			sr := sessions.SessionRequest{Email: test.email, Password: test.pwd}
 			store := &cmd.MemoryCookieStore{}
-			tca := cmd.NewSessionCookieAuthenticator(cfg{}, store, logger.TestLogger(t))
+			tca := cmd.NewSessionCookieAuthenticator(cmd.ClientOpts{}, store, logger.TestLogger(t))
 			cookie, err := tca.Authenticate(sr)
 
 			assert.Error(t, err)
@@ -50,7 +46,7 @@ func TestTerminalCookieAuthenticator_AuthenticateWithSession(t *testing.T) {
 	t.Parallel()
 
 	app := cltest.NewApplicationEVMDisabled(t)
-	require.NoError(t, app.Start())
+	require.NoError(t, app.Start(testutils.Context(t)))
 
 	tests := []struct {
 		name, email, pwd string
@@ -65,7 +61,7 @@ func TestTerminalCookieAuthenticator_AuthenticateWithSession(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			sr := sessions.SessionRequest{Email: test.email, Password: test.pwd}
 			store := &cmd.MemoryCookieStore{}
-			tca := cmd.NewSessionCookieAuthenticator(app.GetConfig(), store, logger.TestLogger(t))
+			tca := cmd.NewSessionCookieAuthenticator(app.NewClientOpts(), store, logger.TestLogger(t))
 			cookie, err := tca.Authenticate(sr)
 
 			if test.wantError {
@@ -141,7 +137,7 @@ func TestTerminalAPIInitializer_InitializeWithoutAPIUser(t *testing.T) {
 			db := pgtest.NewSqlxDB(t)
 			orm := sessions.NewORM(db, time.Minute, logger.TestLogger(t))
 
-			mock := &cltest.MockCountingPrompter{EnteredStrings: test.enteredStrings, NotTerminal: !test.isTerminal}
+			mock := &cltest.MockCountingPrompter{T: t, EnteredStrings: test.enteredStrings, NotTerminal: !test.isTerminal}
 			tai := cmd.NewPromptingAPIInitializer(mock)
 
 			// Remove fixture user
@@ -174,7 +170,7 @@ func TestTerminalAPIInitializer_InitializeWithExistingAPIUser(t *testing.T) {
 	initialUser := cltest.MustRandomUser(t)
 	require.NoError(t, orm.CreateUser(&initialUser))
 
-	mock := &cltest.MockCountingPrompter{}
+	mock := &cltest.MockCountingPrompter{T: t}
 	tai := cmd.NewPromptingAPIInitializer(mock)
 
 	user, err := tai.Initialize(orm)
@@ -254,7 +250,7 @@ func TestPromptingSessionRequestBuilder(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.email, func(t *testing.T) {
 			enteredStrings := []string{test.email, test.pwd}
-			prompter := &cltest.MockCountingPrompter{EnteredStrings: enteredStrings}
+			prompter := &cltest.MockCountingPrompter{T: t, EnteredStrings: enteredStrings}
 			builder := cmd.NewPromptingSessionRequestBuilder(prompter)
 
 			sr, err := builder.Build("")

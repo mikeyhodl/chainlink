@@ -2,11 +2,13 @@ package ocr2key
 
 import (
 	"crypto/ed25519"
-	cryptorand "crypto/rand"
 	"encoding/binary"
 	"io"
 
-	cosmosed25519 "github.com/cosmos/cosmos-sdk/crypto/keys/ed25519"
+	"github.com/pkg/errors"
+
+	"github.com/hdevalence/ed25519consensus"
+	"github.com/smartcontractkit/chainlink/core/utils"
 	"github.com/smartcontractkit/libocr/offchainreporting2/chains/evmutil"
 	ocrtypes "github.com/smartcontractkit/libocr/offchainreporting2/types"
 	"golang.org/x/crypto/blake2s"
@@ -15,33 +17,29 @@ import (
 var _ ocrtypes.OnchainKeyring = &terraKeyring{}
 
 type terraKeyring struct {
-	*cosmosed25519.PrivKey
-	secret []byte
+	privKey ed25519.PrivateKey
+	pubKey  ed25519.PublicKey
 }
 
-func newTerraKeyring() *terraKeyring {
-	secret := make([]byte, 32)
-	_, err := io.ReadFull(cryptorand.Reader, secret)
+func newTerraKeyring(material io.Reader) (*terraKeyring, error) {
+	pubKey, privKey, err := ed25519.GenerateKey(material)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	return &terraKeyring{
-		PrivKey: cosmosed25519.GenPrivKeyFromSecret(secret),
-		secret:  secret,
-	}
+	return &terraKeyring{pubKey: pubKey, privKey: privKey}, nil
 }
 
-func (ok *terraKeyring) PublicKey() ocrtypes.OnchainPublicKey {
-	return ok.PubKey().Bytes()
+func (tk *terraKeyring) PublicKey() ocrtypes.OnchainPublicKey {
+	return []byte(tk.pubKey)
 }
 
-func (ok *terraKeyring) reportToSigData(reportCtx ocrtypes.ReportContext, report ocrtypes.Report) ([]byte, error) {
+func (tk *terraKeyring) reportToSigData(reportCtx ocrtypes.ReportContext, report ocrtypes.Report) ([]byte, error) {
 	rawReportContext := evmutil.RawReportContext(reportCtx)
 	h, err := blake2s.New256(nil)
 	if err != nil {
 		return nil, err
 	}
-	reportLen := make([]byte, 8)
+	reportLen := make([]byte, 4)
 	binary.BigEndian.PutUint32(reportLen[0:], uint32(len(report)))
 	h.Write(reportLen[:])
 	h.Write(report)
@@ -51,38 +49,48 @@ func (ok *terraKeyring) reportToSigData(reportCtx ocrtypes.ReportContext, report
 	return h.Sum(nil), nil
 }
 
-func (ok *terraKeyring) Sign(reportCtx ocrtypes.ReportContext, report ocrtypes.Report) ([]byte, error) {
-	sigData, err := ok.reportToSigData(reportCtx, report)
+func (tk *terraKeyring) Sign(reportCtx ocrtypes.ReportContext, report ocrtypes.Report) ([]byte, error) {
+	sigData, err := tk.reportToSigData(reportCtx, report)
 	if err != nil {
 		return nil, err
 	}
-	signedMsg, err := ok.PrivKey.Sign(sigData)
-	if err != nil {
-		return nil, err
-	}
+	signedMsg := ed25519.Sign(tk.privKey, sigData)
 	// match on-chain parsing (first 32 bytes are for pubkey, remaining are for signature)
-	return append(ok.PublicKey(), signedMsg...), nil
+	return utils.ConcatBytes(tk.PublicKey(), signedMsg), nil
 }
 
-func (ok *terraKeyring) Verify(publicKey ocrtypes.OnchainPublicKey, reportCtx ocrtypes.ReportContext, report ocrtypes.Report, signature []byte) bool {
-	hash, err := ok.reportToSigData(reportCtx, report)
+func (tk *terraKeyring) Verify(publicKey ocrtypes.OnchainPublicKey, reportCtx ocrtypes.ReportContext, report ocrtypes.Report, signature []byte) bool {
+	// Ed25519 signatures are always 64 bytes and the
+	// public key (always prefixed, see Sign above) is always,
+	// 32 bytes, so we always require the max signature length.
+	if len(signature) != tk.MaxSignatureLength() {
+		return false
+	}
+	if len(publicKey) != ed25519.PublicKeySize {
+		return false
+	}
+	hash, err := tk.reportToSigData(reportCtx, report)
 	if err != nil {
 		return false
 	}
-	return ok.PubKey().VerifySignature(hash, signature[32:])
+	return ed25519consensus.Verify(ed25519.PublicKey(publicKey), hash, signature[32:])
 }
 
-func (ok *terraKeyring) MaxSignatureLength() int {
+func (tk *terraKeyring) MaxSignatureLength() int {
 	// Reference: https://pkg.go.dev/crypto/ed25519
 	return ed25519.PublicKeySize + ed25519.SignatureSize // 32 + 64
 }
 
-func (ok *terraKeyring) marshal() ([]byte, error) {
-	return ok.secret, nil
+func (tk *terraKeyring) marshal() ([]byte, error) {
+	return tk.privKey.Seed(), nil
 }
 
-func (ok *terraKeyring) unmarshal(in []byte) error {
-	key := cosmosed25519.GenPrivKeyFromSecret(in)
-	ok.PrivKey = key
+func (tk *terraKeyring) unmarshal(in []byte) error {
+	if len(in) != ed25519.SeedSize {
+		return errors.Errorf("unexpected seed size, got %d want %d", len(in), ed25519.SeedSize)
+	}
+	privKey := ed25519.NewKeyFromSeed(in)
+	tk.privKey = privKey
+	tk.pubKey = privKey.Public().(ed25519.PublicKey)
 	return nil
 }

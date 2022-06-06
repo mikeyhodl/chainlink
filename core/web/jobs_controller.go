@@ -6,12 +6,11 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/smartcontractkit/chainlink/core/services/offchainreporting2"
-
 	"github.com/gin-gonic/gin"
 	"github.com/pkg/errors"
 	uuid "github.com/satori/go.uuid"
 
+	"github.com/smartcontractkit/chainlink/core/services/blockhashstore"
 	"github.com/smartcontractkit/chainlink/core/services/chainlink"
 	"github.com/smartcontractkit/chainlink/core/services/cron"
 	"github.com/smartcontractkit/chainlink/core/services/directrequest"
@@ -19,7 +18,9 @@ import (
 	"github.com/smartcontractkit/chainlink/core/services/job"
 	"github.com/smartcontractkit/chainlink/core/services/keeper"
 	"github.com/smartcontractkit/chainlink/core/services/keystore"
-	"github.com/smartcontractkit/chainlink/core/services/offchainreporting"
+	"github.com/smartcontractkit/chainlink/core/services/ocr"
+	"github.com/smartcontractkit/chainlink/core/services/ocr2/validate"
+	"github.com/smartcontractkit/chainlink/core/services/ocrbootstrap"
 	"github.com/smartcontractkit/chainlink/core/services/pg"
 	"github.com/smartcontractkit/chainlink/core/services/vrf"
 	"github.com/smartcontractkit/chainlink/core/services/webhook"
@@ -46,8 +47,8 @@ func (jc *JobsController) Index(c *gin.Context, size, page, offset int) {
 		return
 	}
 	var resources []presenters.JobResource
-	for _, job := range jobs {
-		resources = append(resources, *presenters.NewJobResource(job))
+	for _, individualJob := range jobs {
+		resources = append(resources, *presenters.NewJobResource(individualJob))
 	}
 
 	paginatedResponse(c, "jobs", size, page, resources, count, err)
@@ -71,7 +72,7 @@ func (jc *JobsController) Show(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		if errors.Cause(err) == sql.ErrNoRows {
+		if errors.Is(errors.Cause(err), sql.ErrNoRows) {
 			jsonAPIError(c, http.StatusNotFound, errors.New("job not found"))
 		} else {
 			jsonAPIError(c, http.StatusInternalServerError, err)
@@ -107,13 +108,13 @@ func (jc *JobsController) Create(c *gin.Context) {
 	config := jc.App.GetConfig()
 	switch jobType {
 	case job.OffchainReporting:
-		jb, err = offchainreporting.ValidatedOracleSpecToml(jc.App.GetChainSet(), request.TOML)
+		jb, err = ocr.ValidatedOracleSpecToml(jc.App.GetChains().EVM, request.TOML)
 		if !config.Dev() && !config.FeatureOffchainReporting() {
 			jsonAPIError(c, http.StatusNotImplemented, errors.New("The Offchain Reporting feature is disabled by configuration"))
 			return
 		}
 	case job.OffchainReporting2:
-		jb, err = offchainreporting2.ValidatedOracleSpecToml(jc.App.GetConfig(), request.TOML)
+		jb, err = validate.ValidatedOracleSpecToml(jc.App.GetConfig(), request.TOML)
 		if !config.Dev() && !config.FeatureOffchainReporting2() {
 			jsonAPIError(c, http.StatusNotImplemented, errors.New("The Offchain Reporting 2 feature is disabled by configuration"))
 			return
@@ -130,6 +131,10 @@ func (jc *JobsController) Create(c *gin.Context) {
 		jb, err = vrf.ValidatedVRFSpec(request.TOML)
 	case job.Webhook:
 		jb, err = webhook.ValidatedWebhookSpec(request.TOML, jc.App.GetExternalInitiatorManager())
+	case job.BlockhashStore:
+		jb, err = blockhashstore.ValidatedSpec(request.TOML)
+	case job.Bootstrap:
+		jb, err = ocrbootstrap.ValidatedBootstrapSpecToml(request.TOML)
 	default:
 		jsonAPIError(c, http.StatusUnprocessableEntity, errors.Errorf("unknown job type: %s", jobType))
 		return
@@ -143,7 +148,7 @@ func (jc *JobsController) Create(c *gin.Context) {
 	defer cancel()
 	err = jc.App.AddJobV2(ctx, &jb)
 	if err != nil {
-		if errors.Cause(err) == job.ErrNoSuchKeyBundle || errors.As(err, &keystore.KeyNotFoundError{}) || errors.Cause(err) == job.ErrNoSuchTransmitterKey {
+		if errors.Is(errors.Cause(err), job.ErrNoSuchKeyBundle) || errors.As(err, &keystore.KeyNotFoundError{}) || errors.Is(errors.Cause(err), job.ErrNoSuchTransmitterKey) {
 			jsonAPIError(c, http.StatusBadRequest, err)
 			return
 		}

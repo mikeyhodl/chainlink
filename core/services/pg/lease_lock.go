@@ -49,25 +49,22 @@ import (
 // back somehow, it will go to take out a lease and realise that the database
 // has been leased to another process, so it will panic and quit immediately
 type LeaseLock interface {
-	TakeAndHold() error
-	Release()
+	TakeAndHold(ctx context.Context) error
 	ClientID() uuid.UUID
+	Release()
 }
 
 var _ LeaseLock = &leaseLock{}
 
 type leaseLock struct {
-	// TODO: Use a "master" application parent ctx that is cancelled on stop?
-	// https://app.shortcut.com/chainlinklabs/story/20770/application-should-have-base-context-that-cancels-on-stop
 	id              uuid.UUID
 	db              *sqlx.DB
 	conn            *sqlx.Conn
 	refreshInterval time.Duration
 	leaseDuration   time.Duration
 	logger          logger.Logger
-
-	chStop chan struct{}
-	wg     sync.WaitGroup
+	stop            func()
+	wgReleased      sync.WaitGroup
 }
 
 // NewLeaseLock creates a "leaseLock" - an entity that tries to take an exclusive lease on the database
@@ -75,32 +72,30 @@ func NewLeaseLock(db *sqlx.DB, appID uuid.UUID, lggr logger.Logger, refreshInter
 	if refreshInterval > leaseDuration/2 {
 		panic("refresh interval must be <= half the lease duration")
 	}
-	return &leaseLock{appID, db, nil, refreshInterval, leaseDuration, lggr.Named("LeaseLock").With("appID", appID), make(chan struct{}), sync.WaitGroup{}}
+	return &leaseLock{appID, db, nil, refreshInterval, leaseDuration, lggr.Named("LeaseLock").With("appID", appID), func() {}, sync.WaitGroup{}}
 }
 
-// TakeAndHold will block and wait indefinitely until it can get its first lock
+// TakeAndHold will block and wait indefinitely until it can get its first lock or ctx is cancelled.
+// Release() function must be used to release the acquired lock.
 // NOT THREAD SAFE
-func (l *leaseLock) TakeAndHold() (err error) {
+func (l *leaseLock) TakeAndHold(ctx context.Context) (err error) {
 	l.logger.Debug("Taking initial lease...")
 	retryCount := 0
 	isInitial := true
-
-	ctxStop, cancel := utils.ContextFromChan(l.chStop)
-	defer cancel()
 
 	for {
 		var gotLease bool
 		var err error
 
 		err = func() error {
-			ctx, cancel := DefaultQueryCtxWithParent(ctxStop)
+			qctx, cancel := DefaultQueryCtxWithParent(ctx)
 			defer cancel()
 			if l.conn == nil {
-				if err = l.checkoutConn(ctx); err != nil {
+				if err = l.checkoutConn(qctx); err != nil {
 					return errors.Wrap(err, "lease lock failed to checkout initial connection")
 				}
 			}
-			gotLease, err = l.getLease(ctx, isInitial)
+			gotLease, err = l.getLease(qctx, isInitial)
 			if errors.Is(err, sql.ErrConnDone) {
 				l.logger.Warnw("DB connection was unexpectedly closed; checking out a new one", "err", err)
 				l.conn = nil
@@ -125,7 +120,7 @@ func (l *leaseLock) TakeAndHold() (err error) {
 		l.logRetry(retryCount)
 		retryCount++
 		select {
-		case <-l.chStop:
+		case <-ctx.Done():
 			err = errors.New("stopped")
 			if l.conn != nil {
 				err = multierr.Combine(err, l.conn.Close())
@@ -135,9 +130,23 @@ func (l *leaseLock) TakeAndHold() (err error) {
 		}
 	}
 	l.logger.Debug("Got exclusive lease on database")
-	l.wg.Add(1)
-	go l.loop()
+
+	lctx, cancel := context.WithCancel(context.Background())
+	l.stop = cancel
+
+	l.wgReleased.Add(1)
+	// Once the lock is acquired, Release() method must be used to release the lock (hence different context).
+	// This is done on purpose: Release() method has exclusive control on releasing the lock.
+	go l.loop(lctx)
+
 	return nil
+}
+
+// Release requests the lock to release and blocks until it gets released.
+// Calling Release for a released lock has no effect.
+func (l *leaseLock) Release() {
+	l.stop()
+	l.wgReleased.Wait()
 }
 
 // checkout dedicated connection for lease lock to bypass any DB contention
@@ -169,40 +178,32 @@ func (l *leaseLock) setInitialTimeouts(ctx context.Context) error {
 
 func (l *leaseLock) logRetry(count int) {
 	if count%1000 == 0 || (count < 1000 && count&(count-1) == 0) {
-		l.logger.Infow("Another application holds the database lease, waiting...", "tryCount", count)
+		l.logger.Infow("Another application is currently holding the database lease (or a previous instance exited uncleanly), waiting for lease to expire...", "tryCount", count)
 	}
 }
 
-func (l *leaseLock) Release() {
-	close(l.chStop)
-	l.wg.Wait()
-}
-
-func (l *leaseLock) loop() {
-	defer l.wg.Done()
+func (l *leaseLock) loop(ctx context.Context) {
+	defer l.wgReleased.Done()
 
 	ticker := time.NewTicker(l.refreshInterval)
 	defer ticker.Stop()
 
-	ctxStop, cancel := utils.ContextFromChan(l.chStop)
-	defer cancel()
-
 	for {
 		select {
-		case <-l.chStop:
-			ctx, cancel := DefaultQueryCtx()
+		case <-ctx.Done():
+			qctx, cancel := DefaultQueryCtx()
 			err := multierr.Combine(
-				utils.JustError(l.conn.ExecContext(ctx, `UPDATE lease_lock SET expires_at=NOW() WHERE client_id = $1 AND expires_at > NOW()`, l.id)),
+				utils.JustError(l.conn.ExecContext(qctx, `UPDATE lease_lock SET expires_at=NOW() WHERE client_id = $1 AND expires_at > NOW()`, l.id)),
 				l.conn.Close(),
 			)
 			cancel()
 			if err != nil {
-				l.logger.Warnw("Error trying to release lease on shutdown", "err", err)
+				l.logger.Warnw("Error trying to release lease on cancelled ctx", "err", err)
 			}
 			return
 		case <-ticker.C:
-			ctx, cancel := context.WithTimeout(ctxStop, l.leaseDuration)
-			gotLease, err := l.getLease(ctx, false)
+			qctx, cancel := context.WithTimeout(ctx, l.leaseDuration)
+			gotLease, err := l.getLease(qctx, false)
 			if errors.Is(err, sql.ErrConnDone) {
 				l.logger.Warnw("DB connection was unexpectedly closed; checking out a new one", "err", err)
 				if err = l.checkoutConn(ctx); err != nil {
@@ -214,12 +215,17 @@ func (l *leaseLock) loop() {
 			if err != nil {
 				l.logger.Errorw("Error trying to refresh database lease", "err", err)
 			} else if !gotLease {
-				l.logger.Fatal("Another node has taken the lease, exiting")
+				if err := l.db.Close(); err != nil {
+					l.logger.Errorw("Failed to close DB", "err", err)
+				}
+				l.logger.Fatal("Another node has taken the lease, exiting immediately")
 			}
 		}
 	}
 }
 
+// initialSQL is necessary because the application attempts to take the lease
+// lock BEFORE running migrations
 var initialSQL = []string{
 	`CREATE TABLE IF NOT EXISTS lease_lock (client_id uuid NOT NULL, expires_at timestamptz NOT NULL)`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS only_one_lease_lock ON lease_lock ((client_id IS NOT NULL))`,
@@ -243,35 +249,25 @@ func (l *leaseLock) getLease(ctx context.Context, isInitial bool) (gotLease bool
 				}
 			}
 		}
-		if _, err = tx.Exec(`LOCK TABLE lease_lock`); err != nil {
-			return errors.Wrap(err, "failed to lock lease_lock table")
-		}
-		var count int
-		err = tx.Get(&count, `SELECT count(*) FROM lease_lock`)
-		if count == 0 {
-			// first time anybody claimed a lock on this table
-			_, err = tx.Exec(`INSERT INTO lease_lock (client_id, expires_at) VALUES ($1, NOW()+$2::interval)`, l.id, leaseDuration)
-			gotLease = true
-			return errors.Wrap(err, "failed to create initial lease_lock")
-		} else if count > 1 {
-			return errors.Errorf("expected only one row in lease_lock, got %d", count)
-		}
+
+		// Upsert the lease_lock, only overwriting an existing one if the existing one has expired
 		var res sql.Result
 		res, err = tx.Exec(`
-UPDATE lease_lock
-SET client_id = $1, expires_at = NOW()+$2::interval
-WHERE (
-	lease_lock.client_id = $1
-	OR
-	lease_lock.expires_at < NOW()
-)`, l.id, leaseDuration)
+INSERT INTO lease_lock (client_id, expires_at) VALUES ($1, NOW()+$2::interval) ON CONFLICT ((client_id IS NOT NULL)) DO UPDATE SET
+client_id = EXCLUDED.client_id,
+expires_at = EXCLUDED.expires_at
+WHERE
+lease_lock.client_id = $1
+OR
+lease_lock.expires_at < NOW()
+`, l.id, leaseDuration)
 		if err != nil {
-			return errors.Wrap(err, "failed to update lease_lock")
+			return errors.Wrap(err, "failed to upsert lease_lock")
 		}
 		var rowsAffected int64
 		rowsAffected, err = res.RowsAffected()
 		if err != nil {
-			return errors.Wrap(err, "failed to update lease_lock (RowsAffected)")
+			return errors.Wrap(err, "failed to get RowsAffected for lease lock upsert")
 		}
 		if rowsAffected > 0 {
 			gotLease = true

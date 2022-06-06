@@ -28,10 +28,6 @@ type Spec struct {
 	JobName string `json:"-"`
 }
 
-func (Spec) TableName() string {
-	return "pipeline_specs"
-}
-
 func (s Spec) Pipeline() (*Pipeline, error) {
 	return Parse(s.DotDagSource)
 }
@@ -54,12 +50,9 @@ type Run struct {
 	PipelineTaskRuns []TaskRun        `json:"taskRuns"`
 	State            RunStatus        `json:"state"`
 
-	Pending   bool
-	FailEarly bool
-}
-
-func (Run) TableName() string {
-	return "pipeline_runs"
+	Pending bool
+	// FailSilently is used to signal that a task with the failEarly flag has failed, and we want to not put this in the db
+	FailSilently bool
 }
 
 func (r Run) GetID() string {
@@ -261,10 +254,6 @@ type TaskRun struct {
 
 	// Used internally for sorting completed results
 	task Task
-}
-
-func (TaskRun) TableName() string {
-	return "pipeline_task_runs"
 }
 
 func (tr TaskRun) GetID() string {

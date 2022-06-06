@@ -6,7 +6,9 @@ union JobSpec =
     OCRSpec |
     OCR2Spec |
     VRFSpec |
-    WebhookSpec
+    WebhookSpec |
+    BlockhashStoreSpec |
+    BootstrapSpec
 
 type CronSpec {
     schedule: String!
@@ -19,7 +21,7 @@ type DirectRequestSpec {
     evmChainID: String
     minIncomingConfirmations: Int!
     minIncomingConfirmationsEnv: Boolean!
-    minContractPayment: String!
+    minContractPaymentLinkJuels: String!
     requesters: [String!]
 }
 
@@ -77,31 +79,61 @@ type OCR2Spec {
     contractID: String!
     contractConfigConfirmations: Int
     contractConfigTrackerPollInterval: String
-    contractConfigTrackerSubscribeInterval: String
     createdAt: Time!
-    isBootstrapPeer: Boolean!
-    juelsPerFeeCoinSource: String
     ocrKeyBundleID: String
     monitoringEndpoint: String
-    p2pBootstrapPeers: [String!]
+    p2pv2Bootstrappers: [String!]
     relay: String!
     relayConfig: Map!
     transmitterID: String
+    pluginType: String!
+    pluginConfig: Map!
 }
 
 type VRFSpec {
     coordinatorAddress: String!
     createdAt: Time!
     evmChainID: String
-    fromAddress: String
+    fromAddresses: [String!]
     minIncomingConfirmations: Int!
     minIncomingConfirmationsEnv: Boolean!
     pollPeriod: String!
     publicKey: String!
     requestedConfsDelay: Int!
     requestTimeout: String!
+    batchCoordinatorAddress: String
+    batchFulfillmentEnabled: Boolean!
+    batchFulfillmentGasMultiplier: Float!
+    chunkSize: Int!
+    backoffInitialDelay: String!
+    backoffMaxDelay: String!
 }
 
 type WebhookSpec {
+    createdAt: Time!
+}
+
+type BlockhashStoreSpec {
+    coordinatorV1Address: String
+    coordinatorV2Address: String
+    waitBlocks: Int!
+    lookbackBlocks: Int!
+    blockhashStoreAddress: String!
+    pollPeriod: String!
+    runTimeout: String!
+    evmChainID: String
+    fromAddress: String
+    createdAt: Time!
+}
+
+type BootstrapSpec {
+    id: ID!
+    contractID: String!
+    relay: String!
+    relayConfig: Map!
+    monitoringEndpoint: String
+    blockchainTimeout: String
+    contractConfigTrackerPollInterval: String
+    contractConfigConfirmations: Int
     createdAt: Time!
 }

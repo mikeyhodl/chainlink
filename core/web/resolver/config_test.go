@@ -33,383 +33,409 @@ func TestResolver_Config(t *testing.T) {
 				// Which means mocking each method here, which I'm not sure we would like to do
 				logLevel := zapcore.ErrorLevel
 				cfg := configtest.NewTestGeneralConfigWithOverrides(t, configtest.GeneralConfigOverrides{
-					AdminCredentialsFile: null.StringFrom("test"),
-					AdvisoryLockID:       null.IntFrom(1),
-					AllowOrigins:         null.StringFrom("test"),
-					BlockBackfillDepth:   null.IntFrom(1),
-					BlockBackfillSkip:    null.BoolFrom(false),
-					ClientNodeURL:        null.StringFrom("test"),
-					DatabaseURL:          null.StringFrom("test"),
-					DefaultChainID:       nil,
-					DefaultHTTPAllowUnrestrictedNetworkAccess: null.BoolFrom(true),
-					DefaultHTTPTimeout:                        nil,
-					DefaultMaxHTTPAttempts:                    null.IntFrom(1),
-					Dev:                                       null.BoolFrom(true),
-					Dialect:                                   "",
-					EVMDisabled:                               null.BoolFrom(true),
-					EthereumDisabled:                          null.BoolFrom(true),
-					EthereumURL:                               null.StringFrom(""),
-					FeatureExternalInitiators:                 null.BoolFrom(true),
-					GlobalBalanceMonitorEnabled:               null.BoolFrom(true),
-					GlobalChainType:                           null.StringFrom(""),
-					GlobalEthTxReaperThreshold:                nil,
-					GlobalEthTxResendAfterThreshold:           nil,
-					GlobalEvmEIP1559DynamicFees:               null.BoolFrom(true),
-					GlobalEvmFinalityDepth:                    null.IntFrom(1),
-					GlobalEvmGasBumpPercent:                   null.IntFrom(1),
-					GlobalEvmGasBumpTxDepth:                   null.IntFrom(1),
-					GlobalEvmGasBumpWei:                       nil,
-					GlobalEvmGasLimitDefault:                  null.IntFrom(1),
-					GlobalEvmGasLimitMultiplier:               null.FloatFrom(1),
-					GlobalEvmGasPriceDefault:                  nil,
-					GlobalEvmGasTipCapDefault:                 nil,
-					GlobalEvmGasTipCapMinimum:                 nil,
-					GlobalEvmHeadTrackerHistoryDepth:          null.IntFrom(1),
-					GlobalEvmHeadTrackerMaxBufferSize:         null.IntFrom(1),
-					GlobalEvmHeadTrackerSamplingInterval:      nil,
-					GlobalEvmLogBackfillBatchSize:             null.IntFrom(1),
-					GlobalEvmMaxGasPriceWei:                   nil,
-					GlobalEvmMinGasPriceWei:                   nil,
-					GlobalEvmNonceAutoSync:                    null.BoolFrom(false),
-					GlobalEvmRPCDefaultBatchSize:              null.IntFrom(1),
-					GlobalFlagsContractAddress:                null.StringFrom("test"),
-					GlobalGasEstimatorMode:                    null.StringFrom("test"),
-					GlobalMinIncomingConfirmations:            null.IntFrom(1),
-					GlobalMinRequiredOutgoingConfirmations:    null.IntFrom(1),
-					GlobalMinimumContractPayment:              nil,
-					KeeperMaximumGracePeriod:                  null.IntFrom(1),
-					KeeperRegistrySyncInterval:                nil,
-					KeeperRegistrySyncUpkeepQueueSize:         null.IntFrom(1),
-					LogLevel:                                  &logLevel,
-					DefaultLogLevel:                           nil,
-					LogFileDir:                                null.StringFrom("foo"),
-					LogSQL:                                    null.BoolFrom(true),
-					LogToDisk:                                 null.BoolFrom(true),
-					OCRKeyBundleID:                            null.StringFrom("test"),
-					OCRObservationTimeout:                     nil,
-					OCRTransmitterAddress:                     nil,
-					P2PBootstrapPeers:                         nil,
-					P2PListenPort:                             null.IntFrom(1),
-					P2PPeerID:                                 "",
-					P2PPeerIDError:                            nil,
-					SecretGenerator:                           nil,
-					TriggerFallbackDBPollInterval:             nil,
+					AdvisoryLockID:                       null.IntFrom(1),
+					AllowOrigins:                         null.StringFrom("test"),
+					BlockBackfillDepth:                   null.IntFrom(1),
+					BlockBackfillSkip:                    null.BoolFrom(false),
+					DatabaseURL:                          null.StringFrom("test"),
+					DefaultChainID:                       nil,
+					DefaultHTTPTimeout:                   nil,
+					Dev:                                  null.BoolFrom(true),
+					ShutdownGracePeriod:                  nil,
+					Dialect:                              "",
+					EVMEnabled:                           null.BoolFrom(false),
+					EVMRPCEnabled:                        null.BoolFrom(false),
+					EthereumURL:                          null.StringFrom(""),
+					FeatureExternalInitiators:            null.BoolFrom(true),
+					GlobalBalanceMonitorEnabled:          null.BoolFrom(true),
+					GlobalChainType:                      null.StringFrom(""),
+					GlobalEthTxReaperThreshold:           nil,
+					GlobalEthTxResendAfterThreshold:      nil,
+					GlobalEvmEIP1559DynamicFees:          null.BoolFrom(true),
+					GlobalEvmFinalityDepth:               null.IntFrom(1),
+					GlobalEvmGasBumpPercent:              null.IntFrom(1),
+					GlobalEvmGasBumpTxDepth:              null.IntFrom(1),
+					GlobalEvmGasBumpWei:                  nil,
+					GlobalEvmGasLimitDefault:             null.IntFrom(1),
+					GlobalEvmGasLimitMultiplier:          null.FloatFrom(1),
+					GlobalEvmGasPriceDefault:             nil,
+					GlobalEvmGasTipCapDefault:            nil,
+					GlobalEvmGasTipCapMinimum:            nil,
+					GlobalEvmHeadTrackerHistoryDepth:     null.IntFrom(1),
+					GlobalEvmHeadTrackerMaxBufferSize:    null.IntFrom(1),
+					GlobalEvmHeadTrackerSamplingInterval: nil,
+					GlobalEvmLogBackfillBatchSize:        null.IntFrom(1),
+					GlobalEvmMaxGasPriceWei:              nil,
+					GlobalEvmMinGasPriceWei:              nil,
+					GlobalEvmNonceAutoSync:               null.BoolFrom(false),
+					GlobalEvmRPCDefaultBatchSize:         null.IntFrom(1),
+					GlobalFlagsContractAddress:           null.StringFrom("test"),
+					GlobalGasEstimatorMode:               null.StringFrom("test"),
+					GlobalMinIncomingConfirmations:       null.IntFrom(1),
+					GlobalMinimumContractPayment:         nil,
+					KeeperMaximumGracePeriod:             null.IntFrom(1),
+					KeeperRegistrySyncInterval:           nil,
+					KeeperRegistrySyncUpkeepQueueSize:    null.IntFrom(1),
+					KeeperTurnLookBack:                   null.IntFrom(0),
+					KeeperTurnFlagEnabled:                null.BoolFrom(true),
+					LogLevel:                             &logLevel,
+					DefaultLogLevel:                      nil,
+					LogFileDir:                           null.StringFrom("foo"),
+					LogSQL:                               null.BoolFrom(true),
+					LogFileMaxSize:                       null.StringFrom("100mb"),
+					LogFileMaxAge:                        null.IntFrom(3),
+					LogFileMaxBackups:                    null.IntFrom(12),
+					OCRKeyBundleID:                       null.StringFrom("test"),
+					OCRObservationTimeout:                nil,
+					OCRTransmitterAddress:                nil,
+					P2PBootstrapPeers:                    nil,
+					P2PListenPort:                        null.IntFrom(1),
+					P2PPeerID:                            "",
+					P2PPeerIDError:                       nil,
+					SecretGenerator:                      nil,
+					TriggerFallbackDBPollInterval:        nil,
 				})
 				cfg.SetRootDir("/tmp/chainlink_test/gql-test")
 
 				f.App.On("GetConfig").Return(cfg)
 			},
 			query: query,
-			result: `{
-  "config":{
-    "items":[
+			result: `
+{
+  "config": {
+    "items": [
       {
-        "key":"ADVISORY_LOCK_CHECK_INTERVAL",
-        "value":"1s"
+        "key": "ADVISORY_LOCK_CHECK_INTERVAL",
+        "value": "1s"
       },
       {
-        "key":"ADVISORY_LOCK_ID",
-        "value":"1027321974924625846"
+        "key": "ADVISORY_LOCK_ID",
+        "value": "1027321974924625846"
       },
       {
-        "key":"ALLOW_ORIGINS",
-        "value":"test"
+        "key": "ALLOW_ORIGINS",
+        "value": "test"
       },
       {
-        "key":"BLOCK_BACKFILL_DEPTH",
-        "value":"1"
+        "key": "BLOCK_BACKFILL_DEPTH",
+        "value": "1"
       },
       {
-        "key":"BLOCK_HISTORY_ESTIMATOR_BLOCK_DELAY",
-        "value":"0"
+        "key": "BLOCK_HISTORY_ESTIMATOR_BLOCK_DELAY",
+        "value": "0"
       },
       {
-        "key":"BLOCK_HISTORY_ESTIMATOR_BLOCK_HISTORY_SIZE",
-        "value":"0"
+        "key": "BLOCK_HISTORY_ESTIMATOR_BLOCK_HISTORY_SIZE",
+        "value": "0"
       },
       {
-        "key":"BLOCK_HISTORY_ESTIMATOR_TRANSACTION_PERCENTILE",
-        "value":"0"
+        "key": "BLOCK_HISTORY_ESTIMATOR_TRANSACTION_PERCENTILE",
+        "value": "0"
       },
       {
-        "key":"BRIDGE_RESPONSE_URL",
-        "value":"http://localhost:6688"
+        "key": "BRIDGE_RESPONSE_URL",
+        "value": "http://localhost:6688"
       },
       {
-        "key":"CHAIN_TYPE",
-        "value":""
+        "key": "CHAIN_TYPE",
+        "value": ""
       },
       {
-        "key":"CLIENT_NODE_URL",
-        "value":"test"
+        "key": "DATABASE_BACKUP_FREQUENCY",
+        "value": "1h0m0s"
       },
       {
-        "key":"DATABASE_BACKUP_FREQUENCY",
-        "value":"1h0m0s"
+        "key": "DATABASE_BACKUP_MODE",
+        "value": "none"
       },
       {
-        "key":"DATABASE_BACKUP_MODE",
-        "value":"none"
+        "key": "DATABASE_BACKUP_ON_VERSION_UPGRADE",
+        "value": "true"
       },
       {
-        "key":"DATABASE_LOCKING_MODE",
-        "value":"none"
+        "key": "DATABASE_LOCKING_MODE",
+        "value": "none"
       },
       {
-        "key":"ETH_CHAIN_ID",
-        "value":"0"
+        "key": "ETH_CHAIN_ID",
+        "value": "0"
       },
       {
-        "key":"DEFAULT_HTTP_LIMIT",
-        "value":"32768"
+        "key": "DEFAULT_HTTP_LIMIT",
+        "value": "32768"
       },
       {
-        "key":"DEFAULT_HTTP_TIMEOUT",
-        "value":"15s"
+        "key": "DEFAULT_HTTP_TIMEOUT",
+        "value": "15s"
       },
       {
-        "key":"CHAINLINK_DEV",
-        "value":"true"
+        "key": "CHAINLINK_DEV",
+        "value": "true"
       },
+	  {
+		"key":"SHUTDOWN_GRACE_PERIOD",
+		"value":"5s"
+	  },
       {
-        "key":"ETH_DISABLED",
-        "value":"true"
+        "key": "EVM_RPC_ENABLED",
+        "value": "false"
       },
       {
-        "key":"ETH_HTTP_URL",
-        "value":""
+        "key": "ETH_HTTP_URL",
+        "value": ""
       },
       {
-        "key":"ETH_SECONDARY_URLS",
-        "value":"[]"
+        "key": "ETH_SECONDARY_URLS",
+        "value": "[]"
       },
       {
-        "key":"ETH_URL",
-        "value":""
+        "key": "ETH_URL",
+        "value": ""
       },
       {
-        "key":"EXPLORER_URL",
-        "value":""
+        "key": "EXPLORER_URL",
+        "value": ""
       },
       {
-        "key":"FM_DEFAULT_TRANSACTION_QUEUE_DEPTH",
-        "value":"1"
+        "key": "FM_DEFAULT_TRANSACTION_QUEUE_DEPTH",
+        "value": "1"
       },
       {
-        "key":"FEATURE_EXTERNAL_INITIATORS",
-        "value":"true"
+        "key": "FEATURE_EXTERNAL_INITIATORS",
+        "value": "true"
       },
       {
-        "key":"FEATURE_OFFCHAIN_REPORTING",
-        "value":"false"
+        "key": "FEATURE_OFFCHAIN_REPORTING",
+        "value": "false"
       },
       {
-        "key":"GAS_ESTIMATOR_MODE",
-        "value":""
+        "key": "GAS_ESTIMATOR_MODE",
+        "value": ""
       },
       {
-        "key":"INSECURE_FAST_SCRYPT",
-        "value":"true"
+        "key": "INSECURE_FAST_SCRYPT",
+        "value": "true"
       },
       {
-        "key":"JSON_CONSOLE",
-        "value":"false"
+        "key": "JSON_CONSOLE",
+        "value": "false"
       },
       {
-        "key":"JOB_PIPELINE_REAPER_INTERVAL",
-        "value":"1h0m0s"
+        "key": "JOB_PIPELINE_REAPER_INTERVAL",
+        "value": "1h0m0s"
       },
       {
-        "key":"JOB_PIPELINE_REAPER_THRESHOLD",
-        "value":"24h0m0s"
+        "key": "JOB_PIPELINE_REAPER_THRESHOLD",
+        "value": "24h0m0s"
       },
       {
-        "key":"KEEPER_DEFAULT_TRANSACTION_QUEUE_DEPTH",
-        "value":"1"
+        "key": "KEEPER_DEFAULT_TRANSACTION_QUEUE_DEPTH",
+        "value": "1"
       },
       {
-        "key":"KEEPER_GAS_PRICE_BUFFER_PERCENT",
-        "value":"20"
+        "key": "KEEPER_GAS_PRICE_BUFFER_PERCENT",
+        "value": "20"
       },
       {
-        "key":"KEEPER_GAS_TIP_CAP_BUFFER_PERCENT",
-        "value":"20"
+        "key": "KEEPER_GAS_TIP_CAP_BUFFER_PERCENT",
+        "value": "20"
       },
       {
-        "key":"KEEPER_MAXIMUM_GRACE_PERIOD",
-        "value":"0"
+        "key": "KEEPER_BASE_FEE_BUFFER_PERCENT",
+        "value": "20"
       },
       {
-        "key":"KEEPER_REGISTRY_CHECK_GAS_OVERHEAD",
-        "value":"0"
+        "key": "KEEPER_MAXIMUM_GRACE_PERIOD",
+        "value": "1"
       },
       {
-        "key":"KEEPER_REGISTRY_PERFORM_GAS_OVERHEAD",
-        "value":"0"
+        "key": "KEEPER_REGISTRY_CHECK_GAS_OVERHEAD",
+        "value": "200000"
       },
       {
-        "key":"KEEPER_REGISTRY_SYNC_UPKEEP_QUEUE_SIZE",
-        "value":"0"
+        "key": "KEEPER_REGISTRY_PERFORM_GAS_OVERHEAD",
+        "value": "150000"
       },
+	  {
+		"key":"KEEPER_REGISTRY_SYNC_INTERVAL",
+		"value":"30m0s"
+	  },
       {
-        "key":"LEASE_LOCK_DURATION",
-        "value":"30s"
+        "key": "KEEPER_REGISTRY_SYNC_UPKEEP_QUEUE_SIZE",
+        "value": "1"
       },
       {
-        "key":"LEASE_LOCK_REFRESH_INTERVAL",
-        "value":"1s"
+        "key": "KEEPER_CHECK_UPKEEP_GAS_PRICE_FEATURE_ENABLED",
+        "value": "false"
       },
       {
-        "key":"FLAGS_CONTRACT_ADDRESS",
-        "value":""
+        "key": "KEEPER_TURN_LOOK_BACK",
+        "value": "0"
       },
       {
-        "key":"LINK_CONTRACT_ADDRESS",
-        "value":""
+        "key": "KEEPER_TURN_FLAG_ENABLED",
+        "value": "true"
       },
       {
-        "key":"LOG_FILE_DIR",
-        "value":"foo"
+        "key": "LEASE_LOCK_DURATION",
+        "value": "10s"
       },
       {
-        "key":"LOG_LEVEL",
-        "value":"error"
+        "key": "LEASE_LOCK_REFRESH_INTERVAL",
+        "value": "1s"
       },
       {
-        "key":"LOG_SQL",
-        "value":"true"
+        "key": "FLAGS_CONTRACT_ADDRESS",
+        "value": ""
       },
       {
-        "key":"LOG_SQL_MIGRATIONS",
-        "value":"false"
+        "key": "LINK_CONTRACT_ADDRESS",
+        "value": ""
       },
       {
-        "key":"LOG_TO_DISK",
-        "value":"true"
+        "key": "LOG_FILE_DIR",
+        "value": "foo"
       },
       {
-        "key":"TRIGGER_FALLBACK_DB_POLL_INTERVAL",
-        "value":"30s"
+        "key": "LOG_LEVEL",
+        "value": "error"
       },
       {
-        "key":"OCR_DEFAULT_TRANSACTION_QUEUE_DEPTH",
-        "value":"1"
+        "key": "LOG_SQL",
+        "value": "true"
       },
       {
-        "key":"OCR_TRACE_LOGGING",
-        "value":"false"
+        "key": "LOG_FILE_MAX_SIZE",
+        "value": "100.00mb"
       },
       {
-        "key":"P2P_NETWORKING_STACK",
-        "value":"V1"
+        "key": "LOG_FILE_MAX_AGE",
+        "value": "3"
       },
       {
-        "key":"P2P_PEER_ID",
-        "value":""
+        "key": "LOG_FILE_MAX_BACKUPS",
+        "value": "12"
       },
       {
-        "key":"P2P_INCOMING_MESSAGE_BUFFER_SIZE",
-        "value":"10"
+        "key": "TRIGGER_FALLBACK_DB_POLL_INTERVAL",
+        "value": "30s"
       },
       {
-        "key":"P2P_OUTGOING_MESSAGE_BUFFER_SIZE",
-        "value":"10"
+        "key": "OCR_DEFAULT_TRANSACTION_QUEUE_DEPTH",
+        "value": "1"
       },
       {
-        "key":"P2P_BOOTSTRAP_PEERS",
-        "value":"[]"
+        "key": "OCR_TRACE_LOGGING",
+        "value": "false"
       },
       {
-        "key":"P2P_LISTEN_IP",
-        "value":"0.0.0.0"
+        "key": "P2P_NETWORKING_STACK",
+        "value": "V1"
       },
       {
-        "key":"P2P_LISTEN_PORT",
-        "value":""
+        "key": "P2P_PEER_ID",
+        "value": ""
       },
       {
-        "key":"P2P_NEW_STREAM_TIMEOUT",
-        "value":"10s"
+        "key": "P2P_INCOMING_MESSAGE_BUFFER_SIZE",
+        "value": "10"
       },
       {
-        "key":"P2P_DHT_LOOKUP_INTERVAL",
-        "value":"10"
+        "key": "P2P_OUTGOING_MESSAGE_BUFFER_SIZE",
+        "value": "10"
       },
       {
-        "key":"P2P_BOOTSTRAP_CHECK_INTERVAL",
-        "value":"20s"
+        "key": "P2P_BOOTSTRAP_PEERS",
+        "value": "[]"
       },
       {
-        "key":"P2PV2_ANNOUNCE_ADDRESSES",
-        "value":"[]"
+        "key": "P2P_LISTEN_IP",
+        "value": "0.0.0.0"
       },
       {
-        "key":"P2PV2_BOOTSTRAPPERS",
-        "value":"[]"
+        "key": "P2P_LISTEN_PORT",
+        "value": ""
       },
       {
-        "key":"P2PV2_DELTA_DIAL",
-        "value":"15s"
+        "key": "P2P_NEW_STREAM_TIMEOUT",
+        "value": "10s"
       },
       {
-        "key":"P2PV2_DELTA_RECONCILE",
-        "value":"1m0s"
+        "key": "P2P_DHT_LOOKUP_INTERVAL",
+        "value": "10"
       },
       {
-        "key":"P2PV2_LISTEN_ADDRESSES",
-        "value":"[]"
+        "key": "P2P_BOOTSTRAP_CHECK_INTERVAL",
+        "value": "20s"
       },
       {
-        "key":"CHAINLINK_PORT",
-        "value":"6688"
+        "key": "P2PV2_ANNOUNCE_ADDRESSES",
+        "value": "[]"
       },
       {
-        "key":"REAPER_EXPIRATION",
-        "value":"240h0m0s"
+        "key": "P2PV2_BOOTSTRAPPERS",
+        "value": "[]"
       },
       {
-        "key":"REPLAY_FROM_BLOCK",
-        "value":"-1"
+        "key": "P2PV2_DELTA_DIAL",
+        "value": "15s"
       },
       {
-        "key":"ROOT",
-        "value":"/tmp/chainlink_test/gql-test"
+        "key": "P2PV2_DELTA_RECONCILE",
+        "value": "1m0s"
       },
       {
-        "key":"SECURE_COOKIES",
-        "value":"true"
+        "key": "P2PV2_LISTEN_ADDRESSES",
+        "value": "[]"
       },
       {
-        "key":"SESSION_TIMEOUT",
-        "value":"2m0s"
+        "key": "CHAINLINK_PORT",
+        "value": "6688"
       },
       {
-        "key":"TELEMETRY_INGRESS_LOGGING",
-        "value":"false"
+        "key": "REAPER_EXPIRATION",
+        "value": "240h0m0s"
       },
       {
-        "key":"TELEMETRY_INGRESS_SERVER_PUB_KEY",
-        "value":""
+        "key": "ROOT",
+        "value": "/tmp/chainlink_test/gql-test"
       },
       {
-        "key":"TELEMETRY_INGRESS_URL",
-        "value":""
+        "key": "SECURE_COOKIES",
+        "value": "true"
       },
       {
-        "key":"CHAINLINK_TLS_HOST",
-        "value":""
+        "key": "SESSION_TIMEOUT",
+        "value": "2m0s"
       },
       {
-        "key":"CHAINLINK_TLS_PORT",
-        "value":"6689"
+        "key": "TELEMETRY_INGRESS_LOGGING",
+        "value": "false"
       },
       {
-        "key":"CHAINLINK_TLS_REDIRECT",
-        "value":"false"
+        "key": "TELEMETRY_INGRESS_SERVER_PUB_KEY",
+        "value": ""
+      },
+      {
+        "key": "TELEMETRY_INGRESS_URL",
+        "value": ""
+      },
+      {
+        "key": "CHAINLINK_TLS_HOST",
+        "value": ""
+      },
+      {
+        "key": "CHAINLINK_TLS_PORT",
+        "value": "6689"
+      },
+      {
+        "key": "CHAINLINK_TLS_REDIRECT",
+        "value": "false"
       }
     ]
   }
-}`,
+}
+`,
 		},
 	}
 

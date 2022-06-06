@@ -106,6 +106,7 @@ export const generateJobDefinition = (
           'contractAddress',
           'evmChainID',
           'minIncomingConfirmations',
+          'minContractPaymentLinkJuels',
           'requesters',
         ),
         ...extractObservationSourceField(job),
@@ -177,14 +178,13 @@ export const generateJobDefinition = (
           'contractID',
           'contractConfigConfirmations',
           'contractConfigTrackerPollInterval',
-          'contractConfigTrackerSubscribeInterval',
-          'isBootstrapPeer',
-          'juelsPerFeeCoinSource',
           'ocrKeyBundleID',
           'monitoringEndpoint',
-          'p2pBootstrapPeers',
+          'p2pv2Bootstrappers',
           'relay',
           'relayConfig',
+          'pluginType',
+          'pluginConfig',
         ),
         // We need to call 'extractSpecFields' again here so we get the spec
         // fields displaying in alphabetical order.
@@ -200,13 +200,57 @@ export const generateJobDefinition = (
           job.spec,
           'coordinatorAddress',
           'evmChainID',
-          'fromAddress',
+          'fromAddresses',
           'minIncomingConfirmations',
           'pollPeriod',
           'publicKey',
           'requestedConfsDelay',
+          'requestTimeout',
+          'batchCoordinatorAddress',
+          'batchFulfillmentEnabled',
+          'batchFulfillmentGasMultiplier',
+          'chunkSize',
+          'backoffInitialDelay',
+          'backoffMaxDelay',
         ),
         ...extractObservationSourceField(job),
+      }
+
+      break
+
+    case 'BlockhashStoreSpec':
+      values = {
+        ...extractJobFields(job),
+        ...extractSpecFields(
+          job.spec,
+          'coordinatorV1Address',
+          'coordinatorV2Address',
+          'waitBlocks',
+          'lookbackBlocks',
+          'blockhashStoreAddress',
+          'pollPeriod',
+          'runTimeout',
+          'evmChainID',
+          'fromAddress',
+        ),
+        ...extractObservationSourceField(job),
+      }
+
+      break
+    case 'BootstrapSpec':
+      values = {
+        ...extractJobFields(job),
+        ...extractSpecFields(
+          job.spec,
+          'id',
+          'contractID',
+          'relay',
+          'relayConfig',
+          'monitoringEndpoint',
+          'blockchainTimeout',
+          'contractConfigTrackerPollInterval',
+          'contractConfigConfirmations',
+        ),
       }
 
       break

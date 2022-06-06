@@ -69,15 +69,15 @@ func TestResolver_Jobs(t *testing.T) {
 				f.App.On("JobORM").Return(f.Mocks.jobORM)
 				f.Mocks.jobORM.On("FindJobs", 0, 50).Return([]job.Job{
 					{
-						ID:                          1,
-						Name:                        null.StringFrom("job1"),
-						SchemaVersion:               1,
-						MaxTaskDuration:             models.Interval(1 * time.Second),
-						ExternalJobID:               externalJobID,
-						CreatedAt:                   f.Timestamp(),
-						Type:                        job.OffchainReporting,
-						PipelineSpecID:              plnSpecID,
-						OffchainreportingOracleSpec: &job.OffchainReportingOracleSpec{},
+						ID:              1,
+						Name:            null.StringFrom("job1"),
+						SchemaVersion:   1,
+						MaxTaskDuration: models.Interval(1 * time.Second),
+						ExternalJobID:   externalJobID,
+						CreatedAt:       f.Timestamp(),
+						Type:            job.OffchainReporting,
+						PipelineSpecID:  plnSpecID,
+						OCROracleSpec:   &job.OCROracleSpec{},
 						PipelineSpec: &pipeline.Spec{
 							DotDagSource: "ds1 [type=bridge name=voter_turnout];",
 						},
@@ -174,15 +174,15 @@ func TestResolver_Job(t *testing.T) {
 			authenticated: true,
 			before: func(f *gqlTestFramework) {
 				f.App.On("JobORM").Return(f.Mocks.jobORM)
-				f.Mocks.jobORM.On("FindJobTx", id).Return(job.Job{
-					ID:                          1,
-					Name:                        null.StringFrom("job1"),
-					SchemaVersion:               1,
-					MaxTaskDuration:             models.Interval(1 * time.Second),
-					ExternalJobID:               externalJobID,
-					CreatedAt:                   f.Timestamp(),
-					Type:                        job.OffchainReporting,
-					OffchainreportingOracleSpec: &job.OffchainReportingOracleSpec{},
+				f.Mocks.jobORM.On("FindJobWithoutSpecErrors", id).Return(job.Job{
+					ID:              1,
+					Name:            null.StringFrom("job1"),
+					SchemaVersion:   1,
+					MaxTaskDuration: models.Interval(1 * time.Second),
+					ExternalJobID:   externalJobID,
+					CreatedAt:       f.Timestamp(),
+					Type:            job.OffchainReporting,
+					OCROracleSpec:   &job.OCROracleSpec{},
 					PipelineSpec: &pipeline.Spec{
 						DotDagSource: "ds1 [type=bridge name=voter_turnout];",
 					},
@@ -229,7 +229,7 @@ func TestResolver_Job(t *testing.T) {
 			authenticated: true,
 			before: func(f *gqlTestFramework) {
 				f.App.On("JobORM").Return(f.Mocks.jobORM)
-				f.Mocks.jobORM.On("FindJobTx", id).Return(job.Job{}, sql.ErrNoRows)
+				f.Mocks.jobORM.On("FindJobWithoutSpecErrors", id).Return(job.Job{}, sql.ErrNoRows)
 			},
 			query: query,
 			result: `
@@ -408,7 +408,7 @@ func TestResolver_DeleteJob(t *testing.T) {
 			name:          "success",
 			authenticated: true,
 			before: func(f *gqlTestFramework) {
-				f.Mocks.jobORM.On("FindJobTx", id).Return(job.Job{
+				f.Mocks.jobORM.On("FindJobWithoutSpecErrors", id).Return(job.Job{
 					ID:              id,
 					Name:            null.StringFrom("test-job"),
 					ExternalJobID:   extJID,
@@ -426,7 +426,7 @@ func TestResolver_DeleteJob(t *testing.T) {
 			name:          "not found on FindJob()",
 			authenticated: true,
 			before: func(f *gqlTestFramework) {
-				f.Mocks.jobORM.On("FindJobTx", id).Return(job.Job{}, sql.ErrNoRows)
+				f.Mocks.jobORM.On("FindJobWithoutSpecErrors", id).Return(job.Job{}, sql.ErrNoRows)
 				f.App.On("JobORM").Return(f.Mocks.jobORM)
 			},
 			query:     mutation,
@@ -444,7 +444,7 @@ func TestResolver_DeleteJob(t *testing.T) {
 			name:          "not found on DeleteJob()",
 			authenticated: true,
 			before: func(f *gqlTestFramework) {
-				f.Mocks.jobORM.On("FindJobTx", id).Return(job.Job{}, nil)
+				f.Mocks.jobORM.On("FindJobWithoutSpecErrors", id).Return(job.Job{}, nil)
 				f.App.On("JobORM").Return(f.Mocks.jobORM)
 				f.App.On("DeleteJob", mock.Anything, id).Return(sql.ErrNoRows)
 			},
@@ -463,7 +463,7 @@ func TestResolver_DeleteJob(t *testing.T) {
 			name:          "generic error on FindJob()",
 			authenticated: true,
 			before: func(f *gqlTestFramework) {
-				f.Mocks.jobORM.On("FindJobTx", id).Return(job.Job{}, gError)
+				f.Mocks.jobORM.On("FindJobWithoutSpecErrors", id).Return(job.Job{}, gError)
 				f.App.On("JobORM").Return(f.Mocks.jobORM)
 			},
 			query:     mutation,
@@ -482,7 +482,7 @@ func TestResolver_DeleteJob(t *testing.T) {
 			name:          "generic error on DeleteJob()",
 			authenticated: true,
 			before: func(f *gqlTestFramework) {
-				f.Mocks.jobORM.On("FindJobTx", id).Return(job.Job{}, nil)
+				f.Mocks.jobORM.On("FindJobWithoutSpecErrors", id).Return(job.Job{}, nil)
 				f.App.On("JobORM").Return(f.Mocks.jobORM)
 				f.App.On("DeleteJob", mock.Anything, id).Return(gError)
 			},

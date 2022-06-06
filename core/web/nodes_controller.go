@@ -4,73 +4,113 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/smartcontractkit/chainlink/core/chains/evm/types"
-	"github.com/smartcontractkit/chainlink/core/services/chainlink"
-	"github.com/smartcontractkit/chainlink/core/utils"
-	"github.com/smartcontractkit/chainlink/core/web/presenters"
-
 	"github.com/gin-gonic/gin"
+	"github.com/manyminds/api2go/jsonapi"
+
+	"github.com/smartcontractkit/chainlink/core/chains"
 )
 
-type NodesController struct {
-	App chainlink.Application
+type NodesController interface {
+	// Index lists nodes, and optionally filters by chain id.
+	Index(c *gin.Context, size, page, offset int)
+	// Create adds a new node.
+	Create(*gin.Context)
+	// Delete removes a node.
+	Delete(*gin.Context)
 }
 
-func (nc *NodesController) Index(c *gin.Context, size, page, offset int) {
+type nodesController[I chains.ID, N chains.Node, R jsonapi.EntityNamer] struct {
+	nodeSet       chains.DBNodeSet[I, N]
+	parseChainID  func(string) (I, error)
+	errNotEnabled error
+	newResource   func(N) R
+	createNode    func(*gin.Context) (N, error)
+}
+
+func newNodesController[I chains.ID, N chains.Node, R jsonapi.EntityNamer](
+	nodeSet chains.DBNodeSet[I, N],
+	errNotEnabled error,
+	parseChainID func(string) (I, error),
+	newResource func(N) R,
+	createNode func(*gin.Context) (N, error),
+) NodesController {
+	return &nodesController[I, N, R]{
+		nodeSet:       nodeSet,
+		errNotEnabled: errNotEnabled,
+		parseChainID:  parseChainID,
+		newResource:   newResource,
+		createNode:    createNode,
+	}
+}
+
+func (n *nodesController[I, N, R]) Index(c *gin.Context, size, page, offset int) {
+	if n.nodeSet == nil {
+		jsonAPIError(c, http.StatusBadRequest, n.errNotEnabled)
+		return
+	}
+
 	id := c.Param("ID")
 
-	var nodes []types.Node
+	var nodes []N
 	var count int
 	var err error
 
 	if id == "" {
 		// fetch all nodes
-		nodes, count, err = nc.App.EVMORM().Nodes(offset, size)
+		nodes, count, err = n.nodeSet.GetNodes(c, offset, size)
 
 	} else {
 		// fetch nodes for chain ID
-		chainID := utils.Big{}
-		if err = chainID.UnmarshalText([]byte(id)); err != nil {
+		chainID, err := n.parseChainID(id)
+		if err != nil {
 			jsonAPIError(c, http.StatusBadRequest, err)
 			return
 		}
-		nodes, count, err = nc.App.EVMORM().NodesForChain(chainID, offset, size)
+		nodes, count, err = n.nodeSet.GetNodesForChain(c, chainID, offset, size)
 	}
 
-	var resources []presenters.NodeResource
+	var resources []R
 	for _, node := range nodes {
-		resources = append(resources, presenters.NewNodeResource(node))
+		res := n.newResource(node)
+		resources = append(resources, res)
 	}
 
 	paginatedResponse(c, "node", size, page, resources, count, err)
 }
 
-func (nc *NodesController) Create(c *gin.Context) {
-	var request types.NewNode
-
-	if err := c.ShouldBindJSON(&request); err != nil {
-		jsonAPIError(c, http.StatusUnprocessableEntity, err)
+func (n *nodesController[I, N, R]) Create(c *gin.Context) {
+	if n.nodeSet == nil {
+		jsonAPIError(c, http.StatusBadRequest, n.errNotEnabled)
 		return
 	}
 
-	node, err := nc.App.EVMORM().CreateNode(request)
-
+	request, err := n.createNode(c)
+	if err != nil {
+		jsonAPIError(c, http.StatusUnprocessableEntity, err)
+		return
+	}
+	node, err := n.nodeSet.CreateNode(c, request)
 	if err != nil {
 		jsonAPIError(c, http.StatusBadRequest, err)
 		return
 	}
 
-	jsonAPIResponse(c, presenters.NewNodeResource(node), "node")
+	jsonAPIResponse(c, n.newResource(node), "node")
 }
 
-func (nc *NodesController) Delete(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("ID"), 10, 64)
+func (n *nodesController[I, N, R]) Delete(c *gin.Context) {
+	if n.nodeSet == nil {
+		jsonAPIError(c, http.StatusBadRequest, n.errNotEnabled)
+		return
+	}
+
+	id, err := strconv.ParseInt(c.Param("ID"), 10, 32)
 	if err != nil {
 		jsonAPIError(c, http.StatusUnprocessableEntity, err)
 		return
 	}
 
-	err = nc.App.EVMORM().DeleteNode(id)
+	err = n.nodeSet.DeleteNode(c, int32(id))
 
 	if err != nil {
 		jsonAPIError(c, http.StatusInternalServerError, err)

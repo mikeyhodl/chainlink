@@ -14,17 +14,24 @@ import (
 	"testing"
 	"time"
 
-	"github.com/smartcontractkit/chainlink/core/services/ocrcommon"
+	evmconfigmocks "github.com/smartcontractkit/chainlink/core/chains/evm/config/mocks"
+	evmmocks "github.com/smartcontractkit/chainlink/core/chains/evm/mocks"
+	"github.com/smartcontractkit/chainlink/core/logger"
+	ocr2mocks "github.com/smartcontractkit/chainlink/core/services/ocr2/mocks"
+	"github.com/smartcontractkit/chainlink/core/services/ocr2/validate"
 
 	"github.com/smartcontractkit/chainlink/core/auth"
 	"github.com/smartcontractkit/chainlink/core/bridges"
+	pkgconfig "github.com/smartcontractkit/chainlink/core/config"
 	"github.com/smartcontractkit/chainlink/core/internal/cltest"
+	"github.com/smartcontractkit/chainlink/core/internal/testutils"
 	"github.com/smartcontractkit/chainlink/core/internal/testutils/evmtest"
+	clhttptest "github.com/smartcontractkit/chainlink/core/internal/testutils/httptest"
 	"github.com/smartcontractkit/chainlink/core/internal/testutils/pgtest"
-	"github.com/smartcontractkit/chainlink/core/logger"
 	"github.com/smartcontractkit/chainlink/core/services/job"
 	"github.com/smartcontractkit/chainlink/core/services/keystore/keys/ethkey"
-	"github.com/smartcontractkit/chainlink/core/services/offchainreporting"
+	"github.com/smartcontractkit/chainlink/core/services/ocr"
+	"github.com/smartcontractkit/chainlink/core/services/ocrcommon"
 	"github.com/smartcontractkit/chainlink/core/services/pipeline"
 	"github.com/smartcontractkit/chainlink/core/services/telemetry"
 	"github.com/smartcontractkit/chainlink/core/services/webhook"
@@ -46,21 +53,21 @@ var monitoringEndpoint = telemetry.MonitoringEndpointGenerator(&telemetry.NoopAg
 func TestRunner(t *testing.T) {
 	config := cltest.NewTestGeneralConfig(t)
 	db := pgtest.NewSqlxDB(t)
-	config.Overrides.DefaultHTTPAllowUnrestrictedNetworkAccess = null.BoolFrom(true)
 
 	keyStore := cltest.NewKeyStore(t, db, config)
 	ethKeyStore := keyStore.Eth()
 
-	ethClient, _, _ := cltest.NewEthMocksWithDefaultChain(t)
+	ethClient := cltest.NewEthMocksWithDefaultChain(t)
 	ethClient.On("HeadByNumber", mock.Anything, (*big.Int)(nil)).Return(cltest.Head(10), nil)
 	ethClient.On("CallContract", mock.Anything, mock.Anything, mock.Anything).Maybe().Return(nil, nil)
 
 	pipelineORM := pipeline.NewORM(db, logger.TestLogger(t), config)
 	cc := evmtest.NewChainSet(t, evmtest.TestChainOpts{DB: db, Client: ethClient, GeneralConfig: config})
-	runner := pipeline.NewRunner(pipelineORM, config, cc, nil, nil, logger.TestLogger(t))
+	c := clhttptest.NewTestLocalOnlyHTTPClient()
+	runner := pipeline.NewRunner(pipelineORM, config, cc, nil, nil, logger.TestLogger(t), c, c)
 	jobORM := job.NewTestORM(t, db, cc, pipelineORM, keyStore, config)
 
-	runner.Start()
+	runner.Start(testutils.Context(t))
 	defer runner.Close()
 
 	_, transmitterAddress := cltest.MustInsertRandomKey(t, ethKeyStore, 0)
@@ -162,21 +169,124 @@ func TestRunner(t *testing.T) {
 	})
 
 	t.Run("referencing a non-existent bridge should error", func(t *testing.T) {
-		_, bridge := cltest.MustCreateBridge(t, db, cltest.BridgeOpts{}, config)
-		jb := makeOCRJobSpecFromToml(t, fmt.Sprintf(`
+		// Create a random bridge name
+		_, b := cltest.MustCreateBridge(t, db, cltest.BridgeOpts{}, config)
+
+		// Reference a different one
+		cfg := new(evmconfigmocks.ChainScopedConfig)
+		cfg.On("Dev").Return(true)
+		cfg.On("ChainType").Return(pkgconfig.ChainType(""))
+		c := new(evmmocks.Chain)
+		c.On("Config").Return(cfg)
+		cs := new(evmmocks.ChainSet)
+		cs.On("Get", mock.Anything).Return(c, nil)
+
+		jb, err := ocr.ValidatedOracleSpecToml(cs, `
 			type               = "offchainreporting"
 			schemaVersion      = 1
+			evmChainID         = 1
+			contractAddress    = "0x613a38AC1659769640aaE063C651F48E0250454C"
+			isBootstrapPeer    = false
+			blockchainTimeout  = "1s"
+			observationTimeout = "10s"
+			databaseTimeout    = "2s"
+			contractConfigTrackerPollInterval="1s"
+			contractConfigConfirmations=1
+			observationGracePeriod = "2s"
+			contractTransmitterTransmitTimeout = "500ms"
+			contractConfigTrackerSubscribeInterval="1s"
 			observationSource = """
-				ds1          [type=bridge name="%s"];
+			ds1          [type=bridge name=blah];
+			ds1_parse    [type=jsonparse path="one,two"];
+			ds1_multiply [type=multiply times=1.23];
+			ds1 -> ds1_parse -> ds1_multiply -> answer1;
+			answer1      [type=median index=0];
 			"""
-		`, bridge.Name.String()))
-		err := jobORM.CreateJob(jb)
-		require.Error(t,
-			pipeline.ErrNoSuchBridge,
-			errors.Cause(err))
-	})
+		`)
+		require.NoError(t, err)
+		// Should error creating it
+		err = jobORM.CreateJob(&jb)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not all bridges exist")
 
-	config.Overrides.DefaultHTTPAllowUnrestrictedNetworkAccess = null.BoolFrom(false)
+		// Same for ocr2
+		cfg2 := new(ocr2mocks.Config)
+		cfg2.On("OCR2ContractTransmitterTransmitTimeout").Return(time.Second)
+		cfg2.On("OCR2DatabaseTimeout").Return(time.Second)
+		cfg2.On("Dev").Return(true)
+		jb2, err := validate.ValidatedOracleSpecToml(cfg2, fmt.Sprintf(`
+type               = "offchainreporting2"
+pluginType         = "median"
+schemaVersion      = 1
+relay              = "evm"
+contractID         = "0x613a38AC1659769640aaE063C651F48E0250454C"
+blockchainTimeout = "1s"
+contractConfigTrackerPollInterval = "2s"
+contractConfigConfirmations = 1
+observationSource  = """
+ds1          [type=bridge name="%s"];
+ds1_parse    [type=jsonparse path="one,two"];
+ds1_multiply [type=multiply times=1.23];
+ds1 -> ds1_parse -> ds1_multiply -> answer1;
+answer1      [type=median index=0];
+"""
+[relayConfig]
+chainID = 1337
+[pluginConfig]
+juelsPerFeeCoinSource = """
+ds1          [type=bridge name=blah];
+ds1_parse    [type=jsonparse path="one,two"];
+ds1_multiply [type=multiply times=1.23];
+ds1 -> ds1_parse -> ds1_multiply -> answer1;
+answer1      [type=median index=0];
+"""
+`, b.Name.String()))
+		require.NoError(t, err)
+		// Should error creating it because of the juels per fee coin non-existent bridge
+		err = jobORM.CreateJob(&jb2)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not all bridges exist")
+
+		// Duplicate bridge names that exist is ok
+		cfg2.On("OCR2ContractTransmitterTransmitTimeout").Return(time.Second)
+		cfg2.On("OCR2DatabaseTimeout").Return(time.Second)
+		cfg2.On("Dev").Return(true)
+		jb3, err := validate.ValidatedOracleSpecToml(cfg2, fmt.Sprintf(`
+type               = "offchainreporting2"
+pluginType         = "median"
+schemaVersion      = 1
+relay              = "evm"
+contractID         = "0x613a38AC1659769640aaE063C651F48E0250454C"
+blockchainTimeout = "1s"
+contractConfigTrackerPollInterval = "2s"
+contractConfigConfirmations = 1
+observationSource  = """
+ds1          [type=bridge name="%s"];
+ds1_parse    [type=jsonparse path="one,two"];
+ds1_multiply [type=multiply times=1.23];
+ds1 -> ds1_parse -> ds1_multiply -> answer1;
+answer1      [type=median index=0];
+"""
+[relayConfig]
+chainID = 1337
+[pluginConfig]
+juelsPerFeeCoinSource = """
+ds1          [type=bridge name="%s"];
+ds1_parse    [type=jsonparse path="one,two"];
+ds1_multiply [type=multiply times=1.23];
+ds1 -> ds1_parse -> ds1_multiply -> answer1;
+ds2          [type=bridge name="%s"];
+ds2_parse    [type=jsonparse path="one,two"];
+ds2_multiply [type=multiply times=1.23];
+ds2 -> ds2_parse -> ds2_multiply -> answer1;
+answer1      [type=median index=0];
+"""
+`, b.Name.String(), b.Name.String(), b.Name.String()))
+		require.NoError(t, err)
+		// Should not error with duplicate bridges
+		err = jobORM.CreateJob(&jb3)
+		require.NoError(t, err)
+	})
 
 	t.Run("handles the case where the parsed value is literally null", func(t *testing.T) {
 		var httpURL string
@@ -323,7 +433,7 @@ ds1 -> ds1_parse;
 """
 `
 		s = fmt.Sprintf(s, cltest.NewEIP55Address(), "http://blah.com", "")
-		jb, err := offchainreporting.ValidatedOracleSpecToml(cc, s)
+		jb, err := ocr.ValidatedOracleSpecToml(cc, s)
 		require.NoError(t, err)
 		err = toml.Unmarshal([]byte(s), &jb)
 		require.NoError(t, err)
@@ -332,7 +442,7 @@ ds1 -> ds1_parse;
 		require.NoError(t, err)
 		// Required to create job spawner delegate.
 		config.Overrides.P2PListenPort = null.IntFrom(2000)
-		sd := offchainreporting.NewDelegate(
+		sd := ocr.NewDelegate(
 			db,
 			jobORM,
 			keyStore,
@@ -341,6 +451,7 @@ ds1 -> ds1_parse;
 			nil,
 			cc,
 			logger.TestLogger(t),
+			config,
 		)
 		_, err = sd.ServicesForSpec(jb)
 		// We expect this to fail as neither the required vars are not set either via the env nor the job itself.
@@ -355,7 +466,7 @@ ds1 -> ds1_parse;
 		isBootstrapPeer    = true
 `
 		s = fmt.Sprintf(s, cltest.NewEIP55Address())
-		jb, err := offchainreporting.ValidatedOracleSpecToml(cc, s)
+		jb, err := ocr.ValidatedOracleSpecToml(cc, s)
 		require.NoError(t, err)
 		err = toml.Unmarshal([]byte(s), &jb)
 		require.NoError(t, err)
@@ -366,9 +477,11 @@ ds1 -> ds1_parse;
 		config.Overrides.P2PListenPort = null.IntFrom(2000)
 
 		lggr := logger.TestLogger(t)
+		_, err = keyStore.P2P().Create()
+		assert.NoError(t, err)
 		pw := ocrcommon.NewSingletonPeerWrapper(keyStore, config, db, lggr)
-		require.NoError(t, pw.Start())
-		sd := offchainreporting.NewDelegate(
+		require.NoError(t, pw.Start(testutils.Context(t)))
+		sd := ocr.NewDelegate(
 			db,
 			jobORM,
 			keyStore,
@@ -377,6 +490,7 @@ ds1 -> ds1_parse;
 			monitoringEndpoint,
 			cc,
 			lggr,
+			config,
 		)
 		_, err = sd.ServicesForSpec(jb)
 		require.NoError(t, err)
@@ -402,7 +516,7 @@ ds1 -> ds1_parse;
 		config.Overrides.P2PBootstrapPeers = []string{"/dns4/chain.link/tcp/1234/p2p/16Uiu2HAm58SP7UL8zsnpeuwHfytLocaqgnyaYKP8wu7qRdrixLju", "/dns4/chain.link/tcp/1235/p2p/16Uiu2HAm58SP7UL8zsnpeuwHfytLocaqgnyaYKP8wu7qRdrixLju"}
 		config.Overrides.OCRKeyBundleID = null.NewString(kb.ID(), true)
 		config.Overrides.OCRTransmitterAddress = &tAddress
-		jb, err := offchainreporting.ValidatedOracleSpecToml(cc, s)
+		jb, err := ocr.ValidatedOracleSpecToml(cc, s)
 		require.NoError(t, err)
 		err = toml.Unmarshal([]byte(s), &jb)
 		require.NoError(t, err)
@@ -410,17 +524,17 @@ ds1 -> ds1_parse;
 		err = jobORM.CreateJob(&jb)
 		require.NoError(t, err)
 		// Assert the override
-		assert.Equal(t, jb.OffchainreportingOracleSpec.ObservationTimeout, models.Interval(cltest.MustParseDuration(t, "15s")))
+		assert.Equal(t, jb.OCROracleSpec.ObservationTimeout, models.Interval(cltest.MustParseDuration(t, "15s")))
 		// Assert that this is default
-		assert.Equal(t, models.Interval(20000000000), jb.OffchainreportingOracleSpec.BlockchainTimeout)
+		assert.Equal(t, models.Interval(20000000000), jb.OCROracleSpec.BlockchainTimeout)
 		assert.Equal(t, models.Interval(cltest.MustParseDuration(t, "1s")), jb.MaxTaskDuration)
 
 		// Required to create job spawner delegate.
 		config.Overrides.P2PListenPort = null.IntFrom(2000)
 		lggr := logger.TestLogger(t)
 		pw := ocrcommon.NewSingletonPeerWrapper(keyStore, config, db, lggr)
-		require.NoError(t, pw.Start())
-		sd := offchainreporting.NewDelegate(
+		require.NoError(t, pw.Start(testutils.Context(t)))
+		sd := ocr.NewDelegate(
 			db,
 			jobORM,
 			keyStore,
@@ -429,6 +543,7 @@ ds1 -> ds1_parse;
 			monitoringEndpoint,
 			cc,
 			lggr,
+			config,
 		)
 		_, err = sd.ServicesForSpec(jb)
 		require.NoError(t, err)
@@ -439,7 +554,7 @@ ds1 -> ds1_parse;
 		require.NoError(t, err)
 
 		s := fmt.Sprintf(minimalNonBootstrapTemplate, cltest.NewEIP55Address(), transmitterAddress.Hex(), kb.ID(), "http://blah.com", "")
-		jb, err := offchainreporting.ValidatedOracleSpecToml(cc, s)
+		jb, err := ocr.ValidatedOracleSpecToml(cc, s)
 		require.NoError(t, err)
 		err = toml.Unmarshal([]byte(s), &jb)
 		require.NoError(t, err)
@@ -453,8 +568,8 @@ ds1 -> ds1_parse;
 		config.Overrides.P2PListenPort = null.IntFrom(2000)
 		lggr := logger.TestLogger(t)
 		pw := ocrcommon.NewSingletonPeerWrapper(keyStore, config, db, lggr)
-		require.NoError(t, pw.Start())
-		sd := offchainreporting.NewDelegate(
+		require.NoError(t, pw.Start(testutils.Context(t)))
+		sd := ocr.NewDelegate(
 			db,
 			jobORM,
 			keyStore,
@@ -463,6 +578,7 @@ ds1 -> ds1_parse;
 			monitoringEndpoint,
 			cc,
 			lggr,
+			config,
 		)
 		_, err = sd.ServicesForSpec(jb)
 		require.NoError(t, err)
@@ -470,7 +586,7 @@ ds1 -> ds1_parse;
 
 	t.Run("test min bootstrap", func(t *testing.T) {
 		s := fmt.Sprintf(minimalBootstrapTemplate, cltest.NewEIP55Address())
-		jb, err := offchainreporting.ValidatedOracleSpecToml(cc, s)
+		jb, err := ocr.ValidatedOracleSpecToml(cc, s)
 		require.NoError(t, err)
 		err = toml.Unmarshal([]byte(s), &jb)
 		require.NoError(t, err)
@@ -481,8 +597,8 @@ ds1 -> ds1_parse;
 		config.Overrides.P2PListenPort = null.IntFrom(2000)
 		lggr := logger.TestLogger(t)
 		pw := ocrcommon.NewSingletonPeerWrapper(keyStore, config, db, lggr)
-		require.NoError(t, pw.Start())
-		sd := offchainreporting.NewDelegate(
+		require.NoError(t, pw.Start(testutils.Context(t)))
+		sd := ocr.NewDelegate(
 			db,
 			jobORM,
 			keyStore,
@@ -491,6 +607,7 @@ ds1 -> ds1_parse;
 			monitoringEndpoint,
 			cc,
 			lggr,
+			config,
 		)
 		_, err = sd.ServicesForSpec(jb)
 		require.NoError(t, err)
@@ -500,7 +617,7 @@ ds1 -> ds1_parse;
 		// Create a keystore with an ocr key bundle and p2p key.
 		kb, err := keyStore.OCR().Create()
 		require.NoError(t, err)
-		spec := fmt.Sprintf(ocrJobSpecTemplate, cltest.NewAddress().Hex(), kb.ID(), transmitterAddress.Hex(), fmt.Sprintf(simpleFetchDataSourceTemplate, "blah", true))
+		spec := fmt.Sprintf(ocrJobSpecTemplate, testutils.NewAddress().Hex(), kb.ID(), transmitterAddress.Hex(), fmt.Sprintf(simpleFetchDataSourceTemplate, "blah", true))
 		jb := makeOCRJobSpecFromToml(t, spec)
 
 		// Create an OCR job
@@ -511,9 +628,9 @@ ds1 -> ds1_parse;
 		config.Overrides.P2PListenPort = null.IntFrom(2000)
 		lggr := logger.TestLogger(t)
 		pw := ocrcommon.NewSingletonPeerWrapper(keyStore, config, db, lggr)
-		require.NoError(t, pw.Start())
+		require.NoError(t, pw.Start(testutils.Context(t)))
 
-		sd := offchainreporting.NewDelegate(
+		sd := ocr.NewDelegate(
 			db,
 			jobORM,
 			keyStore,
@@ -522,14 +639,16 @@ ds1 -> ds1_parse;
 			monitoringEndpoint,
 			cc,
 			lggr,
+			config,
 		)
 		services, err := sd.ServicesForSpec(*jb)
 		require.NoError(t, err)
 
 		// Return an error getting the contract code.
 		ethClient.On("CodeAt", mock.Anything, mock.Anything, mock.Anything).Return(nil, errors.New("no such code"))
+		ctx := testutils.Context(t)
 		for _, s := range services {
-			err = s.Start()
+			err = s.Start(ctx)
 			require.NoError(t, err)
 		}
 		var se []job.SpecError
@@ -634,11 +753,10 @@ ds1 -> ds1_parse;
 	})
 }
 
-func TestRunner_AsyncJob(t *testing.T) {
+func TestRunner_Success_Callback_AsyncJob(t *testing.T) {
 	t.Parallel()
 
-	ethClient, _, assertMockCalls := cltest.NewEthMocksWithStartupAssertions(t)
-	defer assertMockCalls()
+	ethClient := cltest.NewEthMocksWithStartupAssertions(t)
 
 	cfg := cltest.NewTestGeneralConfig(t)
 	cfg.Overrides.FeatureExternalInitiators = null.BoolFrom(true)
@@ -647,7 +765,7 @@ func TestRunner_AsyncJob(t *testing.T) {
 	app := cltest.NewApplicationWithConfig(t, cfg, ethClient, cltest.UseRealExternalInitiatorManager)
 
 	cc := evmtest.NewChainSet(t, evmtest.TestChainOpts{DB: app.GetSqlxDB(), Client: ethClient, GeneralConfig: cfg})
-	require.NoError(t, app.Start())
+	require.NoError(t, app.Start(testutils.Context(t)))
 
 	var (
 		eiName    = "substrate-ei"
@@ -741,25 +859,25 @@ func TestRunner_AsyncJob(t *testing.T) {
 	var jobID int32
 	{
 		tomlSpec := fmt.Sprintf(`
-type            = "webhook"
-schemaVersion   = 1
-externalJobID           = "%v"
-externalInitiators = [
-	{
-		name = "%s",
-		spec = """
-	%s
-"""
-	}
-]
-observationSource   = """
-    parse  [type=jsonparse path="result" data="$(jobRun.requestBody)"]
-	ds1 [type=bridge async=true name="%s" timeout=0 requestData=<{"value": $(parse)}>]
-	ds1_parse [type=jsonparse lax=false  path="data,result"]
-	ds1_multiply [type=multiply times=1000000000000000000 index=0]
-
-	parse->ds1->ds1_parse->ds1_multiply;
-"""
+			type            = "webhook"
+			schemaVersion   = 1
+			externalJobID           = "%v"
+			externalInitiators = [
+				{
+					name = "%s",
+					spec = """
+				%s
+			"""
+				}
+			]
+			observationSource   = """
+				parse  [type=jsonparse path="result" data="$(jobRun.requestBody)"]
+				ds1 [type=bridge async=true name="%s" timeout=0 requestData=<{"value": $(parse)}>]
+				ds1_parse [type=jsonparse lax=false  path="data,result"]
+				ds1_multiply [type=multiply times=1000000000000000000 index=0]
+			
+				parse->ds1->ds1_parse->ds1_multiply;
+			"""
     `, jobUUID, eiName, cltest.MustJSONMarshal(t, eiSpec), bridgeName)
 
 		_, err := webhook.ValidatedWebhookSpec(tomlSpec, app.GetExternalInitiatorManager())
@@ -769,7 +887,6 @@ observationSource   = """
 
 		require.Eventually(t, func() bool { return eiNotifiedOfCreate }, 5*time.Second, 10*time.Millisecond, "expected external initiator to be notified of new job")
 	}
-
 	t.Run("simulate request from EI -> Core node with successful callback", func(t *testing.T) {
 		cltest.AwaitJobActive(t, app.JobSpawner(), jobID, 3*time.Second)
 
@@ -806,7 +923,147 @@ observationSource   = """
 		require.Equal(t, pipeline.JSONSerializable{Val: []interface{}{"123450000000000000000"}, Valid: true}, run.Outputs)
 		require.Equal(t, pipeline.RunErrors{null.String{NullString: sql.NullString{String: "", Valid: false}}}, run.FatalErrors)
 	})
+	// Delete the job
+	{
+		cltest.DeleteJobViaWeb(t, app, jobID)
+		require.Eventually(t, func() bool { return eiNotifiedOfDelete }, 5*time.Second, 10*time.Millisecond, "expected external initiator to be notified of deleted job")
+	}
+}
 
+func TestRunner_Error_Callback_AsyncJob(t *testing.T) {
+	t.Parallel()
+
+	ethClient := cltest.NewEthMocksWithStartupAssertions(t)
+
+	cfg := cltest.NewTestGeneralConfig(t)
+	cfg.Overrides.FeatureExternalInitiators = null.BoolFrom(true)
+	cfg.Overrides.SetTriggerFallbackDBPollInterval(10 * time.Millisecond)
+
+	app := cltest.NewApplicationWithConfig(t, cfg, ethClient, cltest.UseRealExternalInitiatorManager)
+
+	cc := evmtest.NewChainSet(t, evmtest.TestChainOpts{DB: app.GetSqlxDB(), Client: ethClient, GeneralConfig: cfg})
+	require.NoError(t, app.Start(testutils.Context(t)))
+
+	var (
+		eiName    = "substrate-ei"
+		eiSpec    = map[string]interface{}{"foo": "bar"}
+		eiRequest = map[string]interface{}{"result": 42}
+
+		jobUUID = uuid.FromStringOrNil("0EEC7E1D-D0D2-476C-A1A8-72DFB6633F47")
+
+		expectedCreateJobRequest = map[string]interface{}{
+			"jobId":  jobUUID.String(),
+			"type":   eiName,
+			"params": eiSpec,
+		}
+	)
+
+	// Setup EI
+	var eiURL string
+	var eiNotifiedOfCreate bool
+	var eiNotifiedOfDelete bool
+	{
+		mockEI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !eiNotifiedOfCreate {
+				require.Equal(t, http.MethodPost, r.Method)
+
+				eiNotifiedOfCreate = true
+				defer r.Body.Close()
+
+				var gotCreateJobRequest map[string]interface{}
+				err := json.NewDecoder(r.Body).Decode(&gotCreateJobRequest)
+				require.NoError(t, err)
+
+				require.Equal(t, expectedCreateJobRequest, gotCreateJobRequest)
+				w.WriteHeader(http.StatusOK)
+			} else {
+				require.Equal(t, http.MethodDelete, r.Method)
+
+				eiNotifiedOfDelete = true
+				defer r.Body.Close()
+
+				require.Equal(t, fmt.Sprintf("/%v", jobUUID.String()), r.URL.Path)
+			}
+		}))
+		defer mockEI.Close()
+		eiURL = mockEI.URL
+	}
+
+	// Create the EI record on the Core node
+	var eia *auth.Token
+	{
+		eiCreate := map[string]string{
+			"name": eiName,
+			"url":  eiURL,
+		}
+		eiCreateJSON, err := json.Marshal(eiCreate)
+		require.NoError(t, err)
+		eip := cltest.CreateExternalInitiatorViaWeb(t, app, string(eiCreateJSON))
+		eia = &auth.Token{
+			AccessKey: eip.AccessKey,
+			Secret:    eip.Secret,
+		}
+	}
+
+	var responseURL string
+
+	// Create the bridge on the Core node
+	bridgeCalled := make(chan struct{}, 1)
+	var bridgeName string
+	{
+		bridgeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer r.Body.Close()
+
+			var bridgeRequest map[string]interface{}
+			err := json.NewDecoder(r.Body).Decode(&bridgeRequest)
+			require.NoError(t, err)
+
+			require.Equal(t, float64(42), bridgeRequest["value"])
+
+			responseURL = bridgeRequest["responseURL"].(string)
+
+			w.WriteHeader(http.StatusOK)
+			require.NoError(t, err)
+			io.WriteString(w, `{"pending": true}`)
+			bridgeCalled <- struct{}{}
+		}))
+		_, bridge := cltest.MustCreateBridge(t, app.GetSqlxDB(), cltest.BridgeOpts{URL: bridgeServer.URL}, app.GetConfig())
+		bridgeName = bridge.Name.String()
+		defer bridgeServer.Close()
+	}
+
+	// Create the job spec on the Core node
+	var jobID int32
+	{
+		tomlSpec := fmt.Sprintf(`
+			type            = "webhook"
+			schemaVersion   = 1
+			externalJobID           = "%v"
+			externalInitiators = [
+				{
+					name = "%s",
+					spec = """
+				%s
+			"""
+				}
+			]
+			observationSource   = """
+				parse  [type=jsonparse path="result" data="$(jobRun.requestBody)"]
+				ds1 [type=bridge async=true name="%s" timeout=0 requestData=<{"value": $(parse)}>]
+				ds1_parse [type=jsonparse lax=false  path="data,result"]
+				ds1_multiply [type=multiply times=1000000000000000000 index=0]
+			
+				parse->ds1->ds1_parse->ds1_multiply;
+			"""
+    `, jobUUID, eiName, cltest.MustJSONMarshal(t, eiSpec), bridgeName)
+
+		_, err := webhook.ValidatedWebhookSpec(tomlSpec, app.GetExternalInitiatorManager())
+		require.NoError(t, err)
+		job := cltest.CreateJobViaWeb(t, app, []byte(cltest.MustJSONMarshal(t, web.CreateJobRequest{TOML: tomlSpec})))
+		jobID = job.ID
+
+		require.Eventually(t, func() bool { return eiNotifiedOfCreate }, 5*time.Second, 10*time.Millisecond, "expected external initiator to be notified of new job")
+	}
 	t.Run("simulate request from EI -> Core node with erroring callback", func(t *testing.T) {
 		_ = cltest.CreateJobRunViaExternalInitiatorV2(t, app, jobUUID, *eia, cltest.MustJSONMarshal(t, eiRequest))
 
@@ -842,7 +1099,6 @@ observationSource   = """
 		require.Equal(t, pipeline.JSONSerializable{Val: []interface{}{interface{}(nil)}, Valid: true}, run.Outputs)
 		require.Equal(t, pipeline.RunErrors{null.String{NullString: sql.NullString{String: "task inputs: too many errors", Valid: true}}}, run.FatalErrors)
 	})
-
 	// Delete the job
 	{
 		cltest.DeleteJobViaWeb(t, app, jobID)

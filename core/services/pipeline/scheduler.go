@@ -12,21 +12,29 @@ import (
 	"github.com/smartcontractkit/chainlink/core/logger"
 )
 
-func (s *scheduler) newMemoryTaskRun(task Task) *memoryTaskRun {
-	run := &memoryTaskRun{task: task, vars: s.vars.Copy()}
+func (s *scheduler) newMemoryTaskRun(task Task, vars Vars) *memoryTaskRun {
+	run := &memoryTaskRun{task: task, vars: vars}
 
+	propagatableInputs := 0
+	for _, i := range task.Inputs() {
+		if i.PropagateResult {
+			propagatableInputs++
+		}
+	}
 	// fill in the inputs, fast path for no inputs
-	if len(task.Inputs()) != 0 {
+	if propagatableInputs != 0 {
 		// construct a list of inputs, sorted by OutputIndex
 		type input struct {
 			index  int32
 			result Result
 		}
-		inputs := make([]input, 0, len(task.Inputs()))
+		inputs := make([]input, 0, propagatableInputs)
 		// NOTE: we could just allocate via make, then assign directly to run.inputs[i.OutputIndex()]
 		// if we're confident that indices are within range
 		for _, i := range task.Inputs() {
-			inputs = append(inputs, input{index: int32(i.OutputIndex()), result: s.results[i.ID()].Result})
+			if i.PropagateResult {
+				inputs = append(inputs, input{index: int32(i.InputTask.OutputIndex()), result: s.results[i.InputTask.ID()].Result})
+			}
 		}
 		sort.Slice(inputs, func(i, j int) bool {
 			return inputs[i].index < inputs[j].index
@@ -99,7 +107,7 @@ func newScheduler(p *Pipeline, run *Run, vars Vars, lggr logger.Logger) *schedul
 			continue
 		}
 
-		run := s.newMemoryTaskRun(task)
+		run := s.newMemoryTaskRun(task, s.vars.Copy())
 
 		lggr.Debugw("scheduling task run", "dot_id", task.DotID(), "attempts", run.attempts)
 
@@ -141,10 +149,14 @@ func (s *scheduler) reconstructResults() {
 		}
 
 		// store the result in vars
+		var err error
 		if result.Error != nil {
-			s.vars.Set(task.DotID(), result.Error)
+			err = s.vars.Set(task.DotID(), result.Error)
 		} else {
-			s.vars.Set(task.DotID(), result.Value)
+			err = s.vars.Set(task.DotID(), result.Value)
+		}
+		if err != nil {
+			s.logger.Panicf("Vars.Set error: %v", err)
 		}
 
 		// mark all outputs as complete
@@ -187,13 +199,17 @@ func (s *scheduler) Run() {
 		}
 
 		// store the result in vars
+		var err error
 		if result.Result.Error != nil {
-			s.vars.Set(result.Task.DotID(), result.Result.Error)
+			err = s.vars.Set(result.Task.DotID(), result.Result.Error)
 		} else {
-			s.vars.Set(result.Task.DotID(), result.Result.Value)
+			err = s.vars.Set(result.Task.DotID(), result.Result.Value)
+		}
+		if err != nil {
+			s.logger.Panicf("Vars.Set error: %v", err)
 		}
 
-		// if the task was marked as fail early, and the result is a fail
+		// if the task was marked as failEarly, and the result is a fail
 		if result.Result.Error != nil && result.Task.Base().FailEarly {
 			// drain remaining jobs (continue the loop until waiting = 0) then exit
 			s.exiting = true
@@ -220,7 +236,7 @@ func (s *scheduler) Run() {
 				Max:    result.Task.TaskMaxBackoff(),
 			}
 
-			go func() {
+			go func(vars Vars) {
 				select {
 				case <-s.ctx.Done():
 					// report back so the waiting counter gets decreased
@@ -233,12 +249,12 @@ func (s *scheduler) Run() {
 					})
 				case <-time.After(backoff.ForAttempt(float64(result.Attempts - 1))): // we subtract 1 because backoff 0-indexes
 					// schedule a new attempt
-					run := s.newMemoryTaskRun(result.Task)
+					run := s.newMemoryTaskRun(result.Task, vars)
 					run.attempts = result.Attempts
 					s.logger.Debugw("scheduling task run", "dot_id", run.task.DotID(), "attempts", run.attempts)
 					s.taskCh <- run
 				}
-			}()
+			}(s.vars.Copy()) // must Copy() from current goroutine
 
 			// skip scheduling dependencies since it's the task is not complete yet
 			continue
@@ -251,7 +267,7 @@ func (s *scheduler) Run() {
 			// if all dependencies are done, schedule task run
 			if s.dependencies[id] == 0 {
 				task := s.pipeline.Tasks[id]
-				run := s.newMemoryTaskRun(task)
+				run := s.newMemoryTaskRun(task, s.vars.Copy())
 
 				s.logger.Debugw("scheduling task run", "dot_id", run.task.DotID(), "attempts", run.attempts)
 				s.taskCh <- run

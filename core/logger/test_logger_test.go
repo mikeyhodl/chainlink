@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
 
@@ -13,45 +15,37 @@ func init() {
 }
 
 func TestTestLogger(t *testing.T) {
-	lgr := TestLogger(t)
-	lgr.SetLogLevel(zapcore.InfoLevel)
-	requireContains := func(cs ...string) {
-		t.Helper()
-		logs := MemoryLogTestingOnly().String()
-		for _, c := range cs {
-			require.Contains(t, logs, c)
-		}
-	}
-	requireNotContains := func(ns ...string) {
-		t.Helper()
-		logs := MemoryLogTestingOnly().String()
-		for _, n := range ns {
-			require.NotContains(t, logs, n)
-		}
-	}
+	lgr, observed := TestLoggerObserved(t, zapcore.DebugLevel)
 
 	const (
 		testName    = "TestTestLogger"
 		testMessage = "Test message"
 	)
 	lgr.Warn(testMessage)
-	// [WARN]  Test message		logger/test_logger_test.go:23    logger=TestLogger
-	requireContains("[WARN]", testMessage, fmt.Sprintf("logger=%s", testName))
+	// [WARN]  Test message		logger/test_logger_test.go:23    logger=1.0.0@sHaValue.TestLogger
+	logs := observed.TakeAll()
+	require.Len(t, logs, 1)
+	log := logs[0]
+	assert.Equal(t, zap.WarnLevel, log.Level)
+	assert.Equal(t, testMessage, log.Message)
+	assert.Equal(t, fmt.Sprintf("%s.%s", verShaNameStatic(), testName), log.LoggerName)
 
 	const (
 		serviceName    = "ServiceName"
 		serviceMessage = "Service message"
 		key, value     = "key", "value"
-		omittedMessage = "Don't log me"
 	)
-	srvLgr, err := lgr.Named(serviceName).NewRootLogger(zapcore.DebugLevel)
-	require.NoError(t, err)
+	srvLgr := lgr.Named(serviceName)
+	srvLgr.SetLogLevel(zapcore.DebugLevel)
 	srvLgr.Debugw(serviceMessage, key, value)
-	// [DEBUG]  Service message		logger/test_logger_test.go:35    key=value logger=TestLogger.ServiceName
-	requireContains("[DEBUG]", serviceMessage, fmt.Sprintf("%s=%s", key, value),
-		fmt.Sprintf("logger=%s.%s", testName, serviceName))
-	lgr.Debugw(omittedMessage) // omitted since still Info level
-	requireNotContains(omittedMessage)
+	// [DEBUG]  Service message		logger/test_logger_test.go:35    key=value logger=1.0.0@sHaValue.TestLogger.ServiceName
+	logs = observed.TakeAll()
+	require.Len(t, logs, 1)
+	log = logs[0]
+	assert.Equal(t, zap.DebugLevel, log.Level)
+	assert.Equal(t, serviceMessage, log.Message)
+	assert.Equal(t, fmt.Sprintf("%s.%s.%s", verShaNameStatic(), testName, serviceName), log.LoggerName)
+	assert.Equal(t, value, log.ContextMap()[key])
 
 	const (
 		workerName           = "WorkerName"
@@ -61,13 +55,24 @@ func TestTestLogger(t *testing.T) {
 	)
 	wrkLgr := srvLgr.Named(workerName).With(idKey, workerId)
 	wrkLgr.Infow(workerMessage, resultKey, resultVal)
-	// [INFO]	Did some work		logger/test_logger_test.go:49    logger=TestLogger.ServiceName.WorkerName result=success workerId=42
-	requireContains("[INFO]", workerMessage, fmt.Sprintf("%s=%s", idKey, workerId),
-		fmt.Sprintf("%s=%s", resultKey, resultVal), fmt.Sprintf("logger=%s.%s.%s", testName, serviceName, workerName))
+	// [INFO]	Did some work		logger/test_logger_test.go:49    logger=1.0.0@sHaValue.TestLogger.ServiceName.WorkerName result=success workerId=42
+	logs = observed.TakeAll()
+	require.Len(t, logs, 1)
+	log = logs[0]
+	assert.Equal(t, zap.InfoLevel, log.Level)
+	assert.Equal(t, workerMessage, log.Message)
+	assert.Equal(t, fmt.Sprintf("%s.%s.%s.%s", verShaNameStatic(), testName, serviceName, workerName), log.LoggerName)
+	assert.Equal(t, workerId, log.ContextMap()[idKey])
+	assert.Equal(t, resultVal, log.ContextMap()[resultKey])
 
 	const (
 		critMsg = "Critical error"
 	)
 	lgr.Critical(critMsg)
-	requireContains("[CRIT]", critMsg, fmt.Sprintf("logger=%s", testName))
+	logs = observed.TakeAll()
+	require.Len(t, logs, 1)
+	log = logs[0]
+	assert.Equal(t, zap.DPanicLevel, log.Level)
+	assert.Equal(t, critMsg, log.Message)
+	assert.Equal(t, fmt.Sprintf("%s.%s", verShaNameStatic(), testName), log.LoggerName)
 }

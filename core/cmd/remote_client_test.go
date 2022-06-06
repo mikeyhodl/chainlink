@@ -1,10 +1,13 @@
 package cmd_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"io/ioutil"
 	"math/big"
 	"net/http"
 	"os"
@@ -20,15 +23,17 @@ import (
 
 	"github.com/smartcontractkit/chainlink/core/auth"
 	"github.com/smartcontractkit/chainlink/core/bridges"
+	evmmocks "github.com/smartcontractkit/chainlink/core/chains/evm/mocks"
 	"github.com/smartcontractkit/chainlink/core/cmd"
 	"github.com/smartcontractkit/chainlink/core/config"
 	"github.com/smartcontractkit/chainlink/core/internal/cltest"
+	"github.com/smartcontractkit/chainlink/core/internal/testutils"
 	"github.com/smartcontractkit/chainlink/core/internal/testutils/configtest"
 	"github.com/smartcontractkit/chainlink/core/internal/testutils/pgtest"
 	"github.com/smartcontractkit/chainlink/core/logger"
-	ethmocks "github.com/smartcontractkit/chainlink/core/services/eth/mocks"
 	"github.com/smartcontractkit/chainlink/core/services/job"
 	"github.com/smartcontractkit/chainlink/core/sessions"
+	"github.com/smartcontractkit/chainlink/core/static"
 	"github.com/smartcontractkit/chainlink/core/testdata/testspecs"
 	"github.com/smartcontractkit/chainlink/core/web"
 )
@@ -59,21 +64,22 @@ func startNewApplication(t *testing.T, setup ...func(opts *startOptions)) *cltes
 	// Setup config
 	config := cltest.NewTestGeneralConfig(t)
 	config.Overrides.SetDefaultHTTPTimeout(30 * time.Millisecond)
-	config.Overrides.DefaultMaxHTTPAttempts = null.IntFrom(1)
+	config.Overrides.SetHTTPServerWriteTimeout(10 * time.Second)
 
 	// Generally speaking, most tests that use startNewApplication don't
 	// actually need ChainSets loaded. We can greatly reduce test
-	// overhead by setting EVM_DISABLED here. If you need EVM interactions in
+	// overhead by disabling EVM here. If you need EVM interactions in
 	// your tests, you can manually override and turn it on using
 	// withConfigSet.
-	config.Overrides.EVMDisabled = null.BoolFrom(true)
+	config.Overrides.EVMEnabled = null.BoolFrom(false)
+	config.Overrides.P2PEnabled = null.BoolFrom(false)
 
 	if sopts.SetConfig != nil {
 		sopts.SetConfig(config)
 	}
 
 	app := cltest.NewApplicationWithConfigAndKey(t, config, sopts.FlagsAndDeps...)
-	require.NoError(t, app.Start())
+	require.NoError(t, app.Start(testutils.Context(t)))
 
 	return app
 }
@@ -97,12 +103,15 @@ func withKey() func(opts *startOptions) {
 	}
 }
 
-func newEthMock(t *testing.T) (*ethmocks.Client, func()) {
+func newEthMock(t *testing.T) *evmmocks.Client {
+	t.Helper()
+	return cltest.NewEthMocksWithStartupAssertions(t)
+}
+
+func newEthMockWithTransactionsOnBlocksAssertions(t *testing.T) *evmmocks.Client {
 	t.Helper()
 
-	ethClient, _, assertMocksCalled := cltest.NewEthMocksWithStartupAssertions(t)
-
-	return ethClient, assertMocksCalled
+	return cltest.NewEthMocksWithTransactionsOnBlocksAssertions(t)
 }
 
 func keyNameForTest(t *testing.T) string {
@@ -114,9 +123,8 @@ func deleteKeyExportFile(t *testing.T) {
 	err := os.Remove(keyName)
 	if err == nil || os.IsNotExist(err) {
 		return
-	} else {
-		require.NoError(t, err)
 	}
+	require.NoError(t, err)
 }
 
 func TestClient_ReplayBlocks(t *testing.T) {
@@ -124,7 +132,7 @@ func TestClient_ReplayBlocks(t *testing.T) {
 
 	app := startNewApplication(t,
 		withConfigSet(func(c *configtest.TestGeneralConfig) {
-			c.Overrides.EVMDisabled = null.BoolFrom(false)
+			c.Overrides.EVMEnabled = null.BoolFrom(true)
 			c.Overrides.GlobalEvmNonceAutoSync = null.BoolFrom(false)
 			c.Overrides.GlobalBalanceMonitorEnabled = null.BoolFrom(false)
 			c.Overrides.GlobalGasEstimatorMode = null.StringFrom("FixedPrice")
@@ -243,9 +251,7 @@ func TestClient_DestroyExternalInitiator_NotFound(t *testing.T) {
 func TestClient_RemoteLogin(t *testing.T) {
 	t.Parallel()
 
-	app := startNewApplication(t, withConfigSet(func(c *configtest.TestGeneralConfig) {
-		c.Overrides.AdminCredentialsFile = null.StringFrom("")
-	}))
+	app := startNewApplication(t)
 
 	tests := []struct {
 		name, file string
@@ -261,11 +267,13 @@ func TestClient_RemoteLogin(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			enteredStrings := []string{test.email, test.pwd}
-			prompter := &cltest.MockCountingPrompter{EnteredStrings: enteredStrings}
+			prompter := &cltest.MockCountingPrompter{T: t, EnteredStrings: enteredStrings}
 			client := app.NewAuthenticatingClient(prompter)
 
 			set := flag.NewFlagSet("test", 0)
 			set.String("file", test.file, "")
+			set.Bool("bypass-version-check", true, "")
+			set.String("admin-credentials-file", "", "")
 			c := cli.NewContext(nil, set, nil)
 
 			err := client.RemoteLogin(c)
@@ -278,19 +286,129 @@ func TestClient_RemoteLogin(t *testing.T) {
 	}
 }
 
+func TestClient_RemoteBuildCompatibility(t *testing.T) {
+	t.Parallel()
+
+	app := startNewApplication(t)
+	enteredStrings := []string{cltest.APIEmail, cltest.Password}
+	prompter := &cltest.MockCountingPrompter{T: t, EnteredStrings: append(enteredStrings, enteredStrings...)}
+	client := app.NewAuthenticatingClient(prompter)
+
+	remoteVersion, remoteSha := "test"+static.Version, "abcd"+static.Sha
+	client.HTTP = &mockHTTPClient{client.HTTP, remoteVersion, remoteSha}
+
+	expErr := cmd.ErrIncompatible{
+		CLIVersion:    static.Version,
+		CLISha:        static.Sha,
+		RemoteVersion: remoteVersion,
+		RemoteSha:     remoteSha,
+	}.Error()
+
+	// Fails without bypass
+	set := flag.NewFlagSet("test", 0)
+	set.Bool("bypass-version-check", false, "")
+	c := cli.NewContext(nil, set, nil)
+	err := client.RemoteLogin(c)
+	assert.Error(t, err)
+	assert.EqualError(t, err, expErr)
+
+	// Defaults to false
+	set = flag.NewFlagSet("test", 0)
+	c = cli.NewContext(nil, set, nil)
+	err = client.RemoteLogin(c)
+	assert.Error(t, err)
+	assert.EqualError(t, err, expErr)
+}
+
+func TestClient_CheckRemoteBuildCompatibility(t *testing.T) {
+	t.Parallel()
+
+	app := startNewApplication(t)
+	tests := []struct {
+		name                         string
+		remoteVersion, remoteSha     string
+		cliVersion, cliSha           string
+		bypassVersionFlag, wantError bool
+	}{
+		{"success match", "1.1.1", "53120d5", "1.1.1", "53120d5", false, false},
+		{"cli unset fails", "1.1.1", "53120d5", "unset", "unset", false, true},
+		{"remote unset fails", "unset", "unset", "1.1.1", "53120d5", false, true},
+		{"mismatch fail", "1.1.1", "53120d5", "1.6.9", "13230sas", false, true},
+		{"mismatch but using bypass_version_flag", "1.1.1", "53120d5", "1.6.9", "13230sas", true, false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			enteredStrings := []string{cltest.APIEmail, cltest.Password}
+			prompter := &cltest.MockCountingPrompter{T: t, EnteredStrings: enteredStrings}
+			client := app.NewAuthenticatingClient(prompter)
+
+			client.HTTP = &mockHTTPClient{client.HTTP, test.remoteVersion, test.remoteSha}
+
+			err := client.CheckRemoteBuildCompatibility(logger.TestLogger(t), test.bypassVersionFlag, test.cliVersion, test.cliSha)
+			if test.wantError {
+				assert.Error(t, err)
+				assert.ErrorIs(t, err, cmd.ErrIncompatible{
+					RemoteVersion: test.remoteVersion,
+					RemoteSha:     test.remoteSha,
+					CLIVersion:    test.cliVersion,
+					CLISha:        test.cliSha,
+				})
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+type mockHTTPClient struct {
+	HTTP        cmd.HTTPClient
+	mockVersion string
+	mockSha     string
+}
+
+func (h *mockHTTPClient) Get(path string, headers ...map[string]string) (*http.Response, error) {
+	if path == "/v2/build_info" {
+		// Return mocked response here
+		json := fmt.Sprintf(`{"version":"%s","commitSHA":"%s"}`, h.mockVersion, h.mockSha)
+		r := ioutil.NopCloser(bytes.NewReader([]byte(json)))
+		return &http.Response{
+			StatusCode: 200,
+			Body:       r,
+		}, nil
+	}
+	return h.HTTP.Get(path, headers...)
+}
+
+func (h *mockHTTPClient) Post(path string, body io.Reader) (*http.Response, error) {
+	return h.HTTP.Post(path, body)
+}
+
+func (h *mockHTTPClient) Put(path string, body io.Reader) (*http.Response, error) {
+	return h.HTTP.Put(path, body)
+}
+
+func (h *mockHTTPClient) Patch(path string, body io.Reader, headers ...map[string]string) (*http.Response, error) {
+	return h.HTTP.Patch(path, body, headers...)
+}
+
+func (h *mockHTTPClient) Delete(path string) (*http.Response, error) {
+	return h.HTTP.Delete(path)
+}
+
 func TestClient_ChangePassword(t *testing.T) {
 	t.Parallel()
 
 	app := startNewApplication(t)
 
 	enteredStrings := []string{cltest.APIEmail, cltest.Password}
-	prompter := &cltest.MockCountingPrompter{EnteredStrings: enteredStrings}
+	prompter := &cltest.MockCountingPrompter{T: t, EnteredStrings: enteredStrings}
 
 	client := app.NewAuthenticatingClient(prompter)
 	otherClient := app.NewAuthenticatingClient(prompter)
 
 	set := flag.NewFlagSet("test", 0)
 	set.String("file", "../internal/fixtures/apicredentials", "")
+	set.Bool("bypass-version-check", true, "")
 	c := cli.NewContext(nil, set, nil)
 	err := client.RemoteLogin(c)
 	require.NoError(t, err)
@@ -313,16 +431,61 @@ func TestClient_ChangePassword(t *testing.T) {
 	require.Contains(t, err.Error(), "Unauthorized")
 }
 
+func TestClient_Profile_InvalidSecondsParam(t *testing.T) {
+	t.Parallel()
+
+	app := startNewApplication(t)
+	enteredStrings := []string{cltest.APIEmail, cltest.Password}
+	prompter := &cltest.MockCountingPrompter{T: t, EnteredStrings: enteredStrings}
+
+	client := app.NewAuthenticatingClient(prompter)
+
+	set := flag.NewFlagSet("test", 0)
+	set.String("file", "../internal/fixtures/apicredentials", "")
+	set.Bool("bypass-version-check", true, "")
+	c := cli.NewContext(nil, set, nil)
+	err := client.RemoteLogin(c)
+	require.NoError(t, err)
+
+	set.Uint("seconds", 10, "")
+
+	err = client.Profile(cli.NewContext(nil, set, nil))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "profile duration should be less than server write timeout.")
+
+}
+
+func TestClient_Profile(t *testing.T) {
+	t.Parallel()
+
+	app := startNewApplication(t)
+	enteredStrings := []string{cltest.APIEmail, cltest.Password}
+	prompter := &cltest.MockCountingPrompter{T: t, EnteredStrings: enteredStrings}
+
+	client := app.NewAuthenticatingClient(prompter)
+
+	set := flag.NewFlagSet("test", 0)
+	set.String("file", "../internal/fixtures/apicredentials", "")
+	set.Bool("bypass-version-check", true, "")
+	c := cli.NewContext(nil, set, nil)
+	err := client.RemoteLogin(c)
+	require.NoError(t, err)
+
+	set.Uint("seconds", 8, "")
+	set.String("output_dir", t.TempDir(), "")
+
+	err = client.Profile(cli.NewContext(nil, set, nil))
+	require.NoError(t, err)
+}
 func TestClient_SetDefaultGasPrice(t *testing.T) {
 	t.Parallel()
 
-	ethMock, assertMocksCalled := newEthMock(t)
-	defer assertMocksCalled()
+	ethMock := newEthMock(t)
 	app := startNewApplication(t,
 		withKey(),
 		withMocks(ethMock),
 		withConfigSet(func(c *configtest.TestGeneralConfig) {
-			c.Overrides.EVMDisabled = null.BoolFrom(false)
+			c.Overrides.EVMEnabled = null.BoolFrom(true)
 			c.Overrides.GlobalEvmNonceAutoSync = null.BoolFrom(false)
 			c.Overrides.GlobalBalanceMonitorEnabled = null.BoolFrom(false)
 		}),
@@ -336,7 +499,7 @@ func TestClient_SetDefaultGasPrice(t *testing.T) {
 		c := cli.NewContext(nil, set, nil)
 
 		assert.NoError(t, client.SetEvmGasPriceDefault(c))
-		ch, err := app.GetChainSet().Default()
+		ch, err := app.GetChains().EVM.Default()
 		require.NoError(t, err)
 		cfg := ch.Config()
 		assert.Equal(t, big.NewInt(8616460799), cfg.EvmGasPriceDefault())
@@ -363,7 +526,7 @@ func TestClient_SetDefaultGasPrice(t *testing.T) {
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "evmChainID does not match any local chains")
 
-		ch, err := app.GetChainSet().Default()
+		ch, err := app.GetChains().EVM.Default()
 		require.NoError(t, err)
 		cfg := ch.Config()
 		assert.Equal(t, big.NewInt(861646079900), cfg.EvmGasPriceDefault())
@@ -377,7 +540,7 @@ func TestClient_SetDefaultGasPrice(t *testing.T) {
 		c := cli.NewContext(nil, set, nil)
 
 		assert.NoError(t, client.SetEvmGasPriceDefault(c))
-		ch, err := app.GetChainSet().Default()
+		ch, err := app.GetChains().EVM.Default()
 		require.NoError(t, err)
 		cfg := ch.Config()
 
@@ -409,7 +572,8 @@ func TestClient_RunOCRJob_HappyPath(t *testing.T) {
 	t.Parallel()
 
 	app := startNewApplication(t, withConfigSet(func(c *configtest.TestGeneralConfig) {
-		c.Overrides.EVMDisabled = null.BoolFrom(false)
+		c.Overrides.EVMEnabled = null.BoolFrom(true)
+		c.Overrides.FeatureOffchainReporting = null.BoolFrom(true)
 		c.Overrides.GlobalGasEstimatorMode = null.StringFrom("FixedPrice")
 	}))
 	client, _ := app.NewClientAndRenderer()
@@ -424,17 +588,18 @@ func TestClient_RunOCRJob_HappyPath(t *testing.T) {
 	ocrspec := testspecs.GenerateOCRSpec(testspecs.OCRSpecParams{DS1BridgeName: bridge.Name.String(), DS2BridgeName: bridge2.Name.String()})
 	err := toml.Unmarshal([]byte(ocrspec.Toml()), &jb)
 	require.NoError(t, err)
-	var ocrSpec job.OffchainReportingOracleSpec
+	var ocrSpec job.OCROracleSpec
 	err = toml.Unmarshal([]byte(ocrspec.Toml()), &ocrspec)
 	require.NoError(t, err)
-	jb.OffchainreportingOracleSpec = &ocrSpec
+	jb.OCROracleSpec = &ocrSpec
 	key, _ := cltest.MustInsertRandomKey(t, app.KeyStore.Eth())
-	jb.OffchainreportingOracleSpec.TransmitterAddress = &key.Address
+	jb.OCROracleSpec.TransmitterAddress = &key.Address
 
 	err = app.AddJobV2(context.Background(), &jb)
 	require.NoError(t, err)
 
 	set := flag.NewFlagSet("test", 0)
+	set.Bool("bypass-version-check", true, "")
 	set.Parse([]string{strconv.FormatInt(int64(jb.ID), 10)})
 	c := cli.NewContext(nil, set, nil)
 
@@ -449,6 +614,7 @@ func TestClient_RunOCRJob_MissingJobID(t *testing.T) {
 	client, _ := app.NewClientAndRenderer()
 
 	set := flag.NewFlagSet("test", 0)
+	set.Bool("bypass-version-check", true, "")
 	c := cli.NewContext(nil, set, nil)
 
 	require.NoError(t, client.RemoteLogin(c))
@@ -463,6 +629,7 @@ func TestClient_RunOCRJob_JobNotFound(t *testing.T) {
 
 	set := flag.NewFlagSet("test", 0)
 	set.Parse([]string{"1"})
+	set.Bool("bypass-version-check", true, "")
 	c := cli.NewContext(nil, set, nil)
 
 	require.NoError(t, client.RemoteLogin(c))
@@ -483,8 +650,8 @@ func TestClient_AutoLogin(t *testing.T) {
 		Password: cltest.Password,
 	}
 	client, _ := app.NewClientAndRenderer()
-	client.CookieAuthenticator = cmd.NewSessionCookieAuthenticator(app.GetConfig(), &cmd.MemoryCookieStore{}, logger.TestLogger(t))
-	client.HTTP = cmd.NewAuthenticatedHTTPClient(app.Config, client.CookieAuthenticator, sr)
+	client.CookieAuthenticator = cmd.NewSessionCookieAuthenticator(app.NewClientOpts(), &cmd.MemoryCookieStore{}, logger.TestLogger(t))
+	client.HTTP = cmd.NewAuthenticatedHTTPClient(app.Logger, app.NewClientOpts(), client.CookieAuthenticator, sr)
 
 	fs := flag.NewFlagSet("", flag.ExitOnError)
 	err := client.ListJobs(cli.NewContext(nil, fs, nil))
@@ -510,7 +677,7 @@ func TestClient_AutoLogin_AuthFails(t *testing.T) {
 	}
 	client, _ := app.NewClientAndRenderer()
 	client.CookieAuthenticator = FailingAuthenticator{}
-	client.HTTP = cmd.NewAuthenticatedHTTPClient(app.Config, client.CookieAuthenticator, sr)
+	client.HTTP = cmd.NewAuthenticatedHTTPClient(app.Logger, app.NewClientOpts(), client.CookieAuthenticator, sr)
 
 	fs := flag.NewFlagSet("", flag.ExitOnError)
 	err := client.ListJobs(cli.NewContext(nil, fs, nil))
@@ -526,6 +693,11 @@ func (FailingAuthenticator) Cookie() (*http.Cookie, error) {
 // Authenticate retrieves a session ID via a cookie and saves it to disk.
 func (FailingAuthenticator) Authenticate(sessionRequest sessions.SessionRequest) (*http.Cookie, error) {
 	return nil, errors.New("no luck")
+}
+
+// Remove a session ID from disk
+func (FailingAuthenticator) Logout() error {
+	return errors.New("no luck")
 }
 
 func TestClient_SetLogConfig(t *testing.T) {
@@ -560,25 +732,4 @@ func TestClient_SetLogConfig(t *testing.T) {
 	err = client.SetLogSQL(c)
 	assert.NoError(t, err)
 	assert.Equal(t, sqlEnabled, app.Config.LogSQL())
-}
-
-func TestClient_SetPkgLogLevel(t *testing.T) {
-	t.Parallel()
-
-	app := startNewApplication(t)
-	client, _ := app.NewClientAndRenderer()
-
-	logPkg := logger.HeadTracker
-	logLevel := "warn"
-	set := flag.NewFlagSet("logpkg", 0)
-	set.String("pkg", logPkg, "")
-	set.String("level", logLevel, "")
-	c := cli.NewContext(nil, set, nil)
-
-	err := client.SetLogPkg(c)
-	require.NoError(t, err)
-
-	level, ok := logger.NewORM(app.GetSqlxDB(), logger.TestLogger(t)).GetServiceLogLevel(logPkg)
-	require.True(t, ok)
-	assert.Equal(t, logLevel, level)
 }

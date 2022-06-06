@@ -21,7 +21,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"github.com/urfave/cli"
-	null "gopkg.in/guregu/null.v4"
+	"gopkg.in/guregu/null.v4"
 )
 
 func TestEthKeysPresenter_RenderTable(t *testing.T) {
@@ -83,15 +83,14 @@ func TestEthKeysPresenter_RenderTable(t *testing.T) {
 func TestClient_ListETHKeys(t *testing.T) {
 	t.Parallel()
 
-	ethClient, assertMocksCalled := newEthMock(t)
-	defer assertMocksCalled()
+	ethClient := newEthMock(t)
 	ethClient.On("BalanceAt", mock.Anything, mock.Anything, mock.Anything).Return(big.NewInt(42), nil)
 	ethClient.On("GetLINKBalance", mock.Anything, mock.Anything).Return(assets.NewLinkFromJuels(42), nil)
 	app := startNewApplication(t,
 		withKey(),
 		withMocks(ethClient),
 		withConfigSet(func(c *configtest.TestGeneralConfig) {
-			c.Overrides.EVMDisabled = null.BoolFrom(false)
+			c.Overrides.EVMEnabled = null.BoolFrom(true)
 			c.Overrides.GlobalEvmNonceAutoSync = null.BoolFrom(false)
 			c.Overrides.GlobalBalanceMonitorEnabled = null.BoolFrom(false)
 		}),
@@ -109,15 +108,14 @@ func TestClient_ListETHKeys(t *testing.T) {
 func TestClient_CreateETHKey(t *testing.T) {
 	t.Parallel()
 
-	ethClient, assertMocksCalled := newEthMock(t)
-	defer assertMocksCalled()
+	ethClient := newEthMock(t)
 	ethClient.On("BalanceAt", mock.Anything, mock.Anything, mock.Anything).Return(big.NewInt(42), nil)
 	ethClient.On("GetLINKBalance", mock.Anything, mock.Anything).Return(assets.NewLinkFromJuels(42), nil)
 	app := startNewApplication(t,
 		withKey(),
 		withMocks(ethClient),
 		withConfigSet(func(c *configtest.TestGeneralConfig) {
-			c.Overrides.EVMDisabled = null.BoolFrom(false)
+			c.Overrides.EVMEnabled = null.BoolFrom(true)
 			c.Overrides.GlobalEvmNonceAutoSync = null.BoolFrom(false)
 			c.Overrides.GlobalBalanceMonitorEnabled = null.BoolFrom(false)
 		}),
@@ -139,7 +137,7 @@ func TestClient_CreateETHKey(t *testing.T) {
 	id := big.NewInt(0)
 	// TODO: re-enable this once ChainSet is smart enough to reload chains at runtime
 	// https://app.shortcut.com/chainlinklabs/story/17044/chainset-should-update-chains-when-nodes-are-changed
-	// _, err = app.GetChainSet().Add(id, evmtypes.ChainCfg{})
+	// _, err = app.GetChains().EVM.Add(id, evmtypes.ChainCfg{})
 	// require.NoError(t, err)
 
 	set = flag.NewFlagSet("test", 0)
@@ -164,15 +162,14 @@ func TestClient_CreateETHKey(t *testing.T) {
 func TestClient_UpdateETHKey(t *testing.T) {
 	t.Parallel()
 
-	ethClient, assertMocksCalled := newEthMock(t)
-	defer assertMocksCalled()
+	ethClient := newEthMock(t)
 	ethClient.On("BalanceAt", mock.Anything, mock.Anything, mock.Anything).Return(big.NewInt(42), nil)
 	ethClient.On("GetLINKBalance", mock.Anything, mock.Anything).Return(assets.NewLinkFromJuels(42), nil)
 	app := startNewApplication(t,
 		withKey(),
 		withMocks(ethClient),
 		withConfigSet(func(c *configtest.TestGeneralConfig) {
-			c.Overrides.EVMDisabled = null.BoolFrom(false)
+			c.Overrides.EVMEnabled = null.BoolFrom(true)
 			c.Overrides.GlobalEvmNonceAutoSync = null.BoolFrom(false)
 			c.Overrides.GlobalBalanceMonitorEnabled = null.BoolFrom(false)
 		}),
@@ -193,7 +190,7 @@ func TestClient_UpdateETHKey(t *testing.T) {
 	require.NoError(t, client.UpdateETHKey(c))
 
 	// Checking updated config
-	chain, err := app.ChainSet.Get(&cltest.FixtureChainID)
+	chain, err := app.Chains.EVM.Get(&cltest.FixtureChainID)
 	require.NoError(t, err)
 	price := chain.Config().KeySpecificMaxGasPriceWei(key.Address.Address())
 	require.Equal(t, assets.GWei(12345), price)
@@ -202,15 +199,14 @@ func TestClient_UpdateETHKey(t *testing.T) {
 func TestClient_DeleteETHKey(t *testing.T) {
 	t.Parallel()
 
-	ethClient, assertMocksCalled := newEthMock(t)
-	defer assertMocksCalled()
+	ethClient := newEthMock(t)
 	ethClient.On("BalanceAt", mock.Anything, mock.Anything, mock.Anything).Return(big.NewInt(42), nil)
 	ethClient.On("GetLINKBalance", mock.Anything, mock.Anything).Return(assets.NewLinkFromJuels(42), nil)
 	app := startNewApplication(t,
 		withKey(),
 		withMocks(ethClient),
 		withConfigSet(func(c *configtest.TestGeneralConfig) {
-			c.Overrides.EVMDisabled = null.BoolFrom(false)
+			c.Overrides.EVMEnabled = null.BoolFrom(true)
 			c.Overrides.GlobalEvmNonceAutoSync = null.BoolFrom(false)
 			c.Overrides.GlobalBalanceMonitorEnabled = null.BoolFrom(false)
 		}),
@@ -240,14 +236,13 @@ func TestClient_ImportExportETHKey_NoChains(t *testing.T) {
 
 	t.Cleanup(func() { deleteKeyExportFile(t) })
 
-	ethClient, assertMocksCalled := newEthMock(t)
-	defer assertMocksCalled()
+	ethClient := newEthMock(t)
 	ethClient.On("BalanceAt", mock.Anything, mock.Anything, mock.Anything).Return(big.NewInt(42), nil)
 	ethClient.On("GetLINKBalance", mock.Anything, mock.Anything).Return(assets.NewLinkFromJuels(42), nil)
 	app := startNewApplication(t,
 		withMocks(ethClient),
 		withConfigSet(func(c *configtest.TestGeneralConfig) {
-			c.Overrides.EVMDisabled = null.BoolFrom(false)
+			c.Overrides.EVMEnabled = null.BoolFrom(true)
 			c.Overrides.GlobalEvmNonceAutoSync = null.BoolFrom(false)
 			c.Overrides.GlobalBalanceMonitorEnabled = null.BoolFrom(false)
 		}),
@@ -257,6 +252,7 @@ func TestClient_ImportExportETHKey_NoChains(t *testing.T) {
 
 	set := flag.NewFlagSet("test", 0)
 	set.String("file", "internal/fixtures/apicredentials", "")
+	set.Bool("bypass-version-check", true, "")
 	c := cli.NewContext(nil, set, nil)
 	err := client.RemoteLogin(c)
 	require.NoError(t, err)
@@ -320,6 +316,7 @@ func TestClient_ImportExportETHKey_NoChains(t *testing.T) {
 	set = flag.NewFlagSet("test Eth export invalid id", 0)
 	set.Parse([]string{"999"})
 	set.String("newpassword", "../internal/fixtures/apicredentials", "")
+	set.Bool("bypass-version-check", true, "")
 	set.String("output", keyName, "")
 	c = cli.NewContext(nil, set, nil)
 	err = client.ExportETHKey(c)
@@ -331,12 +328,11 @@ func TestClient_ImportExportETHKey_WithChains(t *testing.T) {
 
 	t.Cleanup(func() { deleteKeyExportFile(t) })
 
-	ethClient, assertMocksCalled := newEthMock(t)
-	defer assertMocksCalled()
+	ethClient := newEthMock(t)
 	app := startNewApplication(t,
 		withMocks(ethClient),
 		withConfigSet(func(c *configtest.TestGeneralConfig) {
-			c.Overrides.EVMDisabled = null.BoolFrom(false)
+			c.Overrides.EVMEnabled = null.BoolFrom(true)
 			c.Overrides.GlobalEvmNonceAutoSync = null.BoolFrom(false)
 			c.Overrides.GlobalBalanceMonitorEnabled = null.BoolFrom(false)
 		}),
@@ -350,6 +346,7 @@ func TestClient_ImportExportETHKey_WithChains(t *testing.T) {
 
 	set := flag.NewFlagSet("test", 0)
 	set.String("file", "internal/fixtures/apicredentials", "")
+	set.Bool("bypass-version-check", true, "")
 	c := cli.NewContext(nil, set, nil)
 	err := client.RemoteLogin(c)
 	require.NoError(t, err)
@@ -411,6 +408,7 @@ func TestClient_ImportExportETHKey_WithChains(t *testing.T) {
 	set = flag.NewFlagSet("test Eth export invalid id", 0)
 	set.Parse([]string{"999"})
 	set.String("newpassword", "../internal/fixtures/apicredentials", "")
+	set.Bool("bypass-version-check", true, "")
 	set.String("output", keyName, "")
 	c = cli.NewContext(nil, set, nil)
 	err = client.ExportETHKey(c)
