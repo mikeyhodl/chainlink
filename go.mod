@@ -83,8 +83,8 @@ require (
 	go.dedis.ch/fixbuf v1.0.3
 	go.dedis.ch/kyber/v3 v3.0.14
 	go.uber.org/atomic v1.9.0
-	go.uber.org/multierr v1.8.0
-	go.uber.org/zap v1.24.0
+	go.uber.org/multierr v1.10.0
+	go.uber.org/zap v1.25.0
 	golang.org/x/crypto v0.5.0
 	golang.org/x/exp v0.0.0-20220608143224-64259d1afd70
 	golang.org/x/sync v0.1.0
@@ -112,7 +112,7 @@ require (
 	github.com/armon/go-metrics v0.3.10 // indirect
 	github.com/ava-labs/avalanchego v1.9.0 // indirect
 	github.com/aybabtme/rgbterm v0.0.0-20170906152045-cc83f3b3ce59 // indirect
-	github.com/benbjohnson/clock v1.1.0 // indirect
+	github.com/benbjohnson/clock v1.3.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bgentry/speakeasy v0.1.0 // indirect
 	github.com/blendle/zapdriver v1.3.1 // indirect
