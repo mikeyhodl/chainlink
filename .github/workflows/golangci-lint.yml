@@ -47,7 +47,7 @@ jobs:
         if: |
           github.event.schedule != '' ||
           (needs.changes.outputs.src == 'true' && (github.event_name == 'push' || github.event_name == 'pull_request'))
-        uses: golangci/golangci-lint-action@v3
+        uses: golangci/golangci-lint-action@v4
         with:
           version: v1.50.1
           only-new-issues: ${{github.event.schedule == ''}} # show only new issues, unless it's a scheduled run
