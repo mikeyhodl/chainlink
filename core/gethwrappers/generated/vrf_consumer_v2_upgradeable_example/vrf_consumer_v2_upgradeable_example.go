@@ -15,7 +15,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/event"
-	"github.com/smartcontractkit/chainlink/core/gethwrappers/generated"
+	"github.com/smartcontractkit/chainlink/v2/core/gethwrappers/generated"
 )
 
 var (
@@ -27,6 +27,7 @@ var (
 	_ = common.Big1
 	_ = types.BloomLookup
 	_ = event.NewSubscription
+	_ = abi.ConvertType
 )
 
 var VRFConsumerV2UpgradeableExampleMetaData = &bind.MetaData{
@@ -51,7 +52,7 @@ func DeployVRFConsumerV2UpgradeableExample(auth *bind.TransactOpts, backend bind
 	if err != nil {
 		return common.Address{}, nil, nil, err
 	}
-	return address, tx, &VRFConsumerV2UpgradeableExample{VRFConsumerV2UpgradeableExampleCaller: VRFConsumerV2UpgradeableExampleCaller{contract: contract}, VRFConsumerV2UpgradeableExampleTransactor: VRFConsumerV2UpgradeableExampleTransactor{contract: contract}, VRFConsumerV2UpgradeableExampleFilterer: VRFConsumerV2UpgradeableExampleFilterer{contract: contract}}, nil
+	return address, tx, &VRFConsumerV2UpgradeableExample{address: address, abi: *parsed, VRFConsumerV2UpgradeableExampleCaller: VRFConsumerV2UpgradeableExampleCaller{contract: contract}, VRFConsumerV2UpgradeableExampleTransactor: VRFConsumerV2UpgradeableExampleTransactor{contract: contract}, VRFConsumerV2UpgradeableExampleFilterer: VRFConsumerV2UpgradeableExampleFilterer{contract: contract}}, nil
 }
 
 type VRFConsumerV2UpgradeableExample struct {
@@ -139,11 +140,11 @@ func NewVRFConsumerV2UpgradeableExampleFilterer(address common.Address, filterer
 }
 
 func bindVRFConsumerV2UpgradeableExample(address common.Address, caller bind.ContractCaller, transactor bind.ContractTransactor, filterer bind.ContractFilterer) (*bind.BoundContract, error) {
-	parsed, err := abi.JSON(strings.NewReader(VRFConsumerV2UpgradeableExampleABI))
+	parsed, err := VRFConsumerV2UpgradeableExampleMetaData.GetAbi()
 	if err != nil {
 		return nil, err
 	}
-	return bind.NewBoundContract(address, parsed, caller, transactor, filterer), nil
+	return bind.NewBoundContract(address, *parsed, caller, transactor, filterer), nil
 }
 
 func (_VRFConsumerV2UpgradeableExample *VRFConsumerV2UpgradeableExampleRaw) Call(opts *bind.CallOpts, result *[]interface{}, method string, params ...interface{}) error {

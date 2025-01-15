@@ -3,23 +3,39 @@ package feeds
 import (
 	"time"
 
-	"github.com/smartcontractkit/chainlink/core/services/pg"
-	"github.com/smartcontractkit/chainlink/core/store/models"
+	commonconfig "github.com/smartcontractkit/chainlink-common/pkg/config"
+	coreconfig "github.com/smartcontractkit/chainlink/v2/core/config"
 )
 
-//go:generate mockery --quiet --name Config --output ./mocks/ --case=underscore
+type GeneralConfig interface {
+	OCR() coreconfig.OCR
+	Insecure() coreconfig.Insecure
+}
 
-type Config interface {
-	Dev() bool
-	FeatureOffchainReporting() bool
-	DefaultHTTPTimeout() models.Duration
-	OCRBlockchainTimeout() time.Duration
-	OCRContractConfirmations() uint16
-	OCRContractPollInterval() time.Duration
-	OCRContractSubscribeInterval() time.Duration
-	OCRContractTransmitterTransmitTimeout() time.Duration
-	OCRDatabaseTimeout() time.Duration
-	OCRObservationTimeout() time.Duration
-	OCRObservationGracePeriod() time.Duration
-	pg.QConfig
+type FeatureConfig interface {
+	MultiFeedsManagers() bool
+}
+
+type JobConfig interface {
+	DefaultHTTPTimeout() commonconfig.Duration
+}
+
+type InsecureConfig interface {
+	OCRDevelopmentMode() bool
+}
+
+type OCRConfig interface {
+	Enabled() bool
+}
+
+type OCR2Config interface {
+	Enabled() bool
+	BlockchainTimeout() time.Duration
+	ContractConfirmations() uint16
+	ContractPollInterval() time.Duration
+	ContractTransmitterTransmitTimeout() time.Duration
+	DatabaseTimeout() time.Duration
+	DefaultTransactionQueueDepth() uint32
+	SimulateTransactions() bool
+	TraceLogging() bool
 }

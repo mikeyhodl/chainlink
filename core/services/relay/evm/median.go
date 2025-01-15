@@ -8,27 +8,31 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/pkg/errors"
+
 	"github.com/smartcontractkit/libocr/gethwrappers2/ocr2aggregator"
 	"github.com/smartcontractkit/libocr/offchainreporting2/reportingplugin/median"
-	"github.com/smartcontractkit/libocr/offchainreporting2/types"
-	ocrtypes "github.com/smartcontractkit/libocr/offchainreporting2/types"
-	"github.com/smartcontractkit/sqlx"
+	"github.com/smartcontractkit/libocr/offchainreporting2plus/types"
+	ocrtypes "github.com/smartcontractkit/libocr/offchainreporting2plus/types"
 
-	"github.com/smartcontractkit/chainlink/core/chains/evm"
-	offchain_aggregator_wrapper "github.com/smartcontractkit/chainlink/core/internal/gethwrappers2/generated/offchainaggregator"
-	"github.com/smartcontractkit/chainlink/core/logger"
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
+	"github.com/smartcontractkit/chainlink-common/pkg/services"
+	"github.com/smartcontractkit/chainlink-common/pkg/sqlutil"
+	"github.com/smartcontractkit/chainlink/v2/core/chains/legacyevm"
+	offchain_aggregator_wrapper "github.com/smartcontractkit/chainlink/v2/core/internal/gethwrappers2/generated/offchainaggregator"
 )
 
 var _ median.MedianContract = &medianContract{}
 
 type medianContract struct {
+	services.StateMachine
+	lggr                logger.Logger
 	configTracker       types.ContractConfigTracker
 	contractCaller      *ocr2aggregator.OCR2AggregatorCaller
 	requestRoundTracker *RequestRoundTracker
-	mercuryMode         bool
 }
 
-func newMedianContract(configTracker types.ContractConfigTracker, contractAddress common.Address, chain evm.Chain, specID int32, db *sqlx.DB, lggr logger.Logger, mercuryMode bool) (*medianContract, error) {
+func newMedianContract(configTracker types.ContractConfigTracker, contractAddress common.Address, chain legacyevm.Chain, jobID int32, oracleSpecID int32, ds sqlutil.DataSource, lggr logger.Logger) (*medianContract, error) {
+	lggr = logger.Named(lggr, "MedianContract")
 	contract, err := offchain_aggregator_wrapper.NewOffchainAggregator(contractAddress, chain.Client())
 	if err != nil {
 		return nil, errors.Wrap(err, "could not instantiate NewOffchainAggregator")
@@ -45,6 +49,7 @@ func newMedianContract(configTracker types.ContractConfigTracker, contractAddres
 	}
 
 	return &medianContract{
+		lggr:           lggr,
 		configTracker:  configTracker,
 		contractCaller: contractCaller,
 		requestRoundTracker: NewRequestRoundTracker(
@@ -52,32 +57,33 @@ func newMedianContract(configTracker types.ContractConfigTracker, contractAddres
 			contractFilterer,
 			chain.Client(),
 			chain.LogBroadcaster(),
-			specID,
+			jobID,
 			lggr,
-			db,
-			NewRoundRequestedDB(db.DB, specID, lggr),
-			chain.Config(),
+			ds,
+			NewRoundRequestedDB(ds, oracleSpecID, lggr),
+			chain.Config().EVM(),
 		),
-		mercuryMode: mercuryMode,
 	}, nil
 }
-
-func (oc *medianContract) Start() error {
-	return oc.requestRoundTracker.Start()
+func (oc *medianContract) Start(ctx context.Context) error {
+	return oc.StartOnce("MedianContract", func() error {
+		return oc.requestRoundTracker.Start(ctx)
+	})
 }
 
 func (oc *medianContract) Close() error {
-	return oc.requestRoundTracker.Close()
+	return oc.StopOnce("MedianContract", func() error {
+		return oc.requestRoundTracker.Close()
+	})
+}
+
+func (oc *medianContract) Name() string { return oc.lggr.Name() }
+
+func (oc *medianContract) HealthReport() map[string]error {
+	return map[string]error{oc.Name(): oc.Ready()}
 }
 
 func (oc *medianContract) LatestTransmissionDetails(ctx context.Context) (ocrtypes.ConfigDigest, uint32, uint8, *big.Int, time.Time, error) {
-	if oc.mercuryMode {
-		// Bit of a hack, this must return the correct config digest at least
-		// TODO: Return the actual latest transmission details
-		// https://app.shortcut.com/chainlinklabs/story/57500/return-the-actual-latest-transmission-details
-		_, cd, err := oc.configTracker.LatestConfigDetails(ctx)
-		return cd, 0, 0, big.NewInt(0), time.Time{}, err
-	}
 	opts := bind.CallOpts{Context: ctx, Pending: false}
 	result, err := oc.contractCaller.LatestTransmissionDetails(&opts)
 	return result.ConfigDigest, result.Epoch, result.Round, result.LatestAnswer, time.Unix(int64(result.LatestTimestamp), 0), errors.Wrap(err, "error getting LatestTransmissionDetails")

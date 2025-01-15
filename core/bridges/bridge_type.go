@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/smartcontractkit/chainlink/core/assets"
-	"github.com/smartcontractkit/chainlink/core/store/models"
-	"github.com/smartcontractkit/chainlink/core/utils"
+	"github.com/smartcontractkit/chainlink-common/pkg/assets"
+	"github.com/smartcontractkit/chainlink/v2/core/store/models"
+	"github.com/smartcontractkit/chainlink/v2/core/utils"
 )
 
 // BridgeTypeRequest is the incoming record used to create a BridgeType
@@ -198,4 +198,11 @@ func (t *BridgeName) Scan(value interface{}) error {
 
 	*t = BridgeName(temp)
 	return nil
+}
+
+type BridgeResponse struct {
+	DotID      string
+	SpecID     int32
+	Value      []byte
+	FinishedAt time.Time
 }

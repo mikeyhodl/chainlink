@@ -23,6 +23,9 @@ const (
 	FeedsManCreated EventID = "FEEDS_MAN_CREATED"
 	FeedsManUpdated EventID = "FEEDS_MAN_UPDATED"
 
+	FeedsManEnabled  EventID = "FEEDS_MAN_ENABLED"
+	FeedsManDisabled EventID = "FEEDS_MAN_DISABLED"
+
 	FeedsManChainConfigCreated EventID = "FEEDS_MAN_CHAIN_CONFIG_CREATED"
 	FeedsManChainConfigUpdated EventID = "FEEDS_MAN_CHAIN_CONFIG_UPDATED"
 	FeedsManChainConfigDeleted EventID = "FEEDS_MAN_CHAIN_CONFIG_DELETED"
@@ -49,7 +52,7 @@ const (
 	KeyDeleted  EventID = "KEY_DELETED"
 
 	EthTransactionCreated    EventID = "ETH_TRANSACTION_CREATED"
-	TerraTransactionCreated  EventID = "TERRA_TRANSACTION_CREATED"
+	CosmosTransactionCreated EventID = "COSMOS_TRANSACTION_CREATED"
 	SolanaTransactionCreated EventID = "SOLANA_TRANSACTION_CREATED"
 
 	JobCreated EventID = "JOB_CREATED"

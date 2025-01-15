@@ -2,20 +2,26 @@ package cmd_test
 
 import (
 	"bytes"
+	_ "embed"
 	"flag"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/hashicorp/consul/sdk/freeport"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/urfave/cli"
 
-	"github.com/smartcontractkit/chainlink/core/cmd"
-	"github.com/smartcontractkit/chainlink/core/internal/cltest"
-	"github.com/smartcontractkit/chainlink/core/services/chainlink"
-	"github.com/smartcontractkit/chainlink/core/services/job"
-	"github.com/smartcontractkit/chainlink/core/store/models"
-	"github.com/smartcontractkit/chainlink/core/web/presenters"
+	commonconfig "github.com/smartcontractkit/chainlink-common/pkg/config"
+	"github.com/smartcontractkit/chainlink/v2/core/cmd"
+	"github.com/smartcontractkit/chainlink/v2/core/internal/cltest"
+	"github.com/smartcontractkit/chainlink/v2/core/internal/testutils"
+	"github.com/smartcontractkit/chainlink/v2/core/services/chainlink"
+	"github.com/smartcontractkit/chainlink/v2/core/services/job"
+	"github.com/smartcontractkit/chainlink/v2/core/store/models"
+	"github.com/smartcontractkit/chainlink/v2/core/web/presenters"
 )
 
 func TestJobPresenter_RenderTable(t *testing.T) {
@@ -223,6 +229,18 @@ func TestJob_FriendlyCreatedAt(t *testing.T) {
 			now.Format(time.RFC3339),
 		},
 		{
+			"gets the blockheaderfeeder spec created at timestamp",
+			&cmd.JobPresenter{
+				JobResource: presenters.JobResource{
+					Type: presenters.BlockHeaderFeederJobSpec,
+					BlockHeaderFeederSpec: &presenters.BlockHeaderFeederSpec{
+						CreatedAt: now,
+					},
+				},
+			},
+			now.Format(time.RFC3339),
+		},
+		{
 			"invalid type",
 			&cmd.JobPresenter{
 				JobResource: presenters.JobResource{
@@ -281,19 +299,26 @@ func TestJob_ToRows(t *testing.T) {
 	}, job.ToRows())
 }
 
-func TestClient_ListFindJobs(t *testing.T) {
+//go:embed direct-request-spec-template.yml
+var directRequestSpecTemplate string
+
+func getDirectRequestSpec() string {
+	return fmt.Sprintf(directRequestSpecTemplate, uuid.New(), uuid.New())
+}
+
+func TestShell_ListFindJobs(t *testing.T) {
 	t.Parallel()
 
 	app := startNewApplicationV2(t, func(c *chainlink.Config, s *chainlink.Secrets) {
 		c.EVM[0].Enabled = ptr(true)
 	})
-	client, r := app.NewClientAndRenderer()
+	client, r := app.NewShellAndRenderer()
 
 	// Create the job
 	fs := flag.NewFlagSet("", flag.ExitOnError)
-	cltest.FlagSetApplyFromAction(client.CreateJob, fs, "")
+	flagSetApplyFromAction(client.CreateJob, fs, "")
 
-	require.NoError(t, fs.Parse([]string{"../testdata/tomlspecs/direct-request-spec.toml"}))
+	require.NoError(t, fs.Parse([]string{getDirectRequestSpec()}))
 
 	err := client.CreateJob(cli.NewContext(nil, fs, nil))
 	require.NoError(t, err)
@@ -307,19 +332,19 @@ func TestClient_ListFindJobs(t *testing.T) {
 	assert.Equal(t, createOutput.ID, jobs[0].ID)
 }
 
-func TestClient_ShowJob(t *testing.T) {
+func TestShell_ShowJob(t *testing.T) {
 	t.Parallel()
 
 	app := startNewApplicationV2(t, func(c *chainlink.Config, s *chainlink.Secrets) {
 		c.EVM[0].Enabled = ptr(true)
 	})
-	client, r := app.NewClientAndRenderer()
+	client, r := app.NewShellAndRenderer()
 
 	// Create the job
 	fs := flag.NewFlagSet("", flag.ExitOnError)
-	cltest.FlagSetApplyFromAction(client.CreateJob, fs, "")
+	flagSetApplyFromAction(client.CreateJob, fs, "")
 
-	require.NoError(t, fs.Parse([]string{"../testdata/tomlspecs/direct-request-spec.toml"}))
+	require.NoError(t, fs.Parse([]string{getDirectRequestSpec()}))
 
 	err := client.CreateJob(cli.NewContext(nil, fs, nil))
 	require.NoError(t, err)
@@ -328,7 +353,8 @@ func TestClient_ShowJob(t *testing.T) {
 	require.True(t, ok, "Expected Renders[0] to be *cmd.JobPresenter, got %T", r.Renders[0])
 
 	set := flag.NewFlagSet("test", 0)
-	set.Parse([]string{createOutput.ID})
+	err = set.Parse([]string{createOutput.ID})
+	require.NoError(t, err)
 	c := cli.NewContext(nil, set, nil)
 
 	require.NoError(t, client.ShowJob(c))
@@ -336,13 +362,17 @@ func TestClient_ShowJob(t *testing.T) {
 	assert.Equal(t, createOutput.ID, job.ID)
 }
 
-func TestClient_CreateJobV2(t *testing.T) {
+//go:embed ocr-bootstrap-spec.yml
+var ocrBootstrapSpec string
+
+func TestShell_CreateJobV2(t *testing.T) {
 	t.Parallel()
 
 	app := startNewApplicationV2(t, func(c *chainlink.Config, s *chainlink.Secrets) {
-		c.Database.Listener.FallbackPollInterval = models.MustNewDuration(100 * time.Millisecond)
+		c.Database.Listener.FallbackPollInterval = commonconfig.MustNewDuration(100 * time.Millisecond)
 		c.OCR.Enabled = ptr(true)
-		c.P2P.V1.Enabled = ptr(true)
+		c.P2P.V2.Enabled = ptr(true)
+		c.P2P.V2.ListenAddresses = &[]string{fmt.Sprintf("127.0.0.1:%d", freeport.GetOne(t))}
 		c.P2P.PeerID = &cltest.DefaultP2PPeerID
 		c.EVM[0].Enabled = ptr(true)
 		c.EVM[0].NonceAutoSync = ptr(false)
@@ -351,14 +381,16 @@ func TestClient_CreateJobV2(t *testing.T) {
 	}, func(opts *startOptions) {
 		opts.FlagsAndDeps = append(opts.FlagsAndDeps, cltest.DefaultP2PKey)
 	})
-	client, r := app.NewClientAndRenderer()
+	client, r := app.NewShellAndRenderer()
 
 	requireJobsCount(t, app.JobORM(), 0)
 
 	fs := flag.NewFlagSet("", flag.ExitOnError)
-	cltest.FlagSetApplyFromAction(client.CreateJob, fs, "")
+	flagSetApplyFromAction(client.CreateJob, fs, "")
 
-	require.NoError(t, fs.Parse([]string{"../testdata/tomlspecs/ocr-bootstrap-spec.toml"}))
+	nameAndExternalJobID := uuid.New()
+	spec := fmt.Sprintf(ocrBootstrapSpec, nameAndExternalJobID, nameAndExternalJobID)
+	require.NoError(t, fs.Parse([]string{spec}))
 
 	err := client.CreateJob(cli.NewContext(nil, fs, nil))
 	require.NoError(t, err)
@@ -371,23 +403,23 @@ func TestClient_CreateJobV2(t *testing.T) {
 	assert.Equal(t, "0x27548a32b9aD5D64c5945EaE9Da5337bc3169D15", output.OffChainReportingSpec.ContractAddress.String())
 }
 
-func TestClient_DeleteJob(t *testing.T) {
+func TestShell_DeleteJob(t *testing.T) {
 	t.Parallel()
 
 	app := startNewApplicationV2(t, func(c *chainlink.Config, s *chainlink.Secrets) {
-		c.Database.Listener.FallbackPollInterval = models.MustNewDuration(100 * time.Millisecond)
+		c.Database.Listener.FallbackPollInterval = commonconfig.MustNewDuration(100 * time.Millisecond)
 		c.EVM[0].Enabled = ptr(true)
 		c.EVM[0].NonceAutoSync = ptr(false)
 		c.EVM[0].BalanceMonitor.Enabled = ptr(false)
 		c.EVM[0].GasEstimator.Mode = ptr("FixedPrice")
 	})
-	client, r := app.NewClientAndRenderer()
+	client, r := app.NewShellAndRenderer()
 
 	// Create the job
 	fs := flag.NewFlagSet("", flag.ExitOnError)
-	cltest.FlagSetApplyFromAction(client.CreateJob, fs, "")
+	flagSetApplyFromAction(client.CreateJob, fs, "")
 
-	require.NoError(t, fs.Parse([]string{"../testdata/tomlspecs/direct-request-spec.toml"}))
+	require.NoError(t, fs.Parse([]string{getDirectRequestSpec()}))
 
 	err := client.CreateJob(cli.NewContext(nil, fs, nil))
 	require.NoError(t, err)
@@ -397,19 +429,20 @@ func TestClient_DeleteJob(t *testing.T) {
 
 	requireJobsCount(t, app.JobORM(), 1)
 
-	jobs, _, err := app.JobORM().FindJobs(0, 1000)
+	ctx := testutils.Context(t)
+	jobs, _, err := app.JobORM().FindJobs(ctx, 0, 1000)
 	require.NoError(t, err)
 	jobID := jobs[0].ID
 	cltest.AwaitJobActive(t, app.JobSpawner(), jobID, 3*time.Second)
 
 	// Must supply job id
 	set := flag.NewFlagSet("test", 0)
-	cltest.FlagSetApplyFromAction(client.DeleteJob, set, "")
+	flagSetApplyFromAction(client.DeleteJob, set, "")
 	c := cli.NewContext(nil, set, nil)
 	require.Equal(t, "must pass the job id to be archived", client.DeleteJob(c).Error())
 
 	set = flag.NewFlagSet("test", 0)
-	cltest.FlagSetApplyFromAction(client.DeleteJob, set, "")
+	flagSetApplyFromAction(client.DeleteJob, set, "")
 
 	require.NoError(t, set.Parse([]string{output.ID}))
 
@@ -420,7 +453,8 @@ func TestClient_DeleteJob(t *testing.T) {
 }
 
 func requireJobsCount(t *testing.T, orm job.ORM, expected int) {
-	jobs, _, err := orm.FindJobs(0, 1000)
+	ctx := testutils.Context(t)
+	jobs, _, err := orm.FindJobs(ctx, 0, 1000)
 	require.NoError(t, err)
 	require.Len(t, jobs, expected)
 }

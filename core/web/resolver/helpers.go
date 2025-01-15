@@ -1,6 +1,7 @@
 package resolver
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -8,9 +9,9 @@ import (
 	"github.com/graph-gophers/graphql-go"
 	"github.com/pkg/errors"
 
-	"github.com/smartcontractkit/chainlink/core/assets"
-	"github.com/smartcontractkit/chainlink/core/bridges"
-	"github.com/smartcontractkit/chainlink/core/utils/stringutils"
+	"github.com/smartcontractkit/chainlink-common/pkg/assets"
+	"github.com/smartcontractkit/chainlink/v2/core/bridges"
+	"github.com/smartcontractkit/chainlink/v2/core/utils/stringutils"
 )
 
 const (
@@ -51,9 +52,9 @@ func pageLimit(limit *int32) int {
 
 // ValidateBridgeTypeUniqueness checks that a bridge has not already been created
 //
-/// This validation function should be moved into a bridge service.
-func ValidateBridgeTypeUniqueness(bt *bridges.BridgeTypeRequest, orm bridges.ORM) error {
-	_, err := orm.FindBridge(bt.Name)
+// / This validation function should be moved into a bridge service.
+func ValidateBridgeTypeUniqueness(ctx context.Context, bt *bridges.BridgeTypeRequest, orm bridges.ORM) error {
+	_, err := orm.FindBridge(ctx, bt.Name)
 	if err == nil {
 		return fmt.Errorf("bridge type %v already exists", bt.Name)
 	}
@@ -82,7 +83,6 @@ func ValidateBridgeType(bt *bridges.BridgeTypeRequest) error {
 	}
 	if bt.MinimumContractPayment != nil &&
 		bt.MinimumContractPayment.Cmp(assets.NewLinkFromJuels(0)) < 0 {
-
 		return errors.New("MinimumContractPayment must be positive")
 	}
 

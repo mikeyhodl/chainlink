@@ -209,6 +209,9 @@ func (p *Pipeline) ByDotID(id string) Task {
 }
 
 func Parse(text string) (*Pipeline, error) {
+	if strings.TrimSpace(text) == "" {
+		return nil, errors.New("empty pipeline")
+	}
 	g := NewGraph()
 	err := g.UnmarshalText([]byte(text))
 
@@ -232,6 +235,8 @@ func Parse(text string) (*Pipeline, error) {
 	// we need a temporary mapping of graph.IDs to positional ids after toposort
 	ids := make(map[int64]int)
 
+	resultIdxs := make(map[int32]struct{})
+
 	// use the new ordering as the id so that we can easily reproduce the original toposort
 	for id, node := range nodes {
 		node, is := node.(*GraphNode)
@@ -246,6 +251,15 @@ func Parse(text string) (*Pipeline, error) {
 		task, err := UnmarshalTaskFromMap(TaskType(node.attrs["type"]), node.attrs, id, node.dotID)
 		if err != nil {
 			return nil, err
+		}
+
+		if task.OutputIndex() > 0 {
+			_, exists := resultIdxs[task.OutputIndex()]
+			if exists {
+				return nil, errors.New("duplicate sorting indexes detected")
+			}
+
+			resultIdxs[task.OutputIndex()] = struct{}{}
 		}
 
 		// re-link the edges

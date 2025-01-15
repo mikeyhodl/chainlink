@@ -8,9 +8,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap/zapcore"
 
-	"github.com/smartcontractkit/chainlink/core/logger/audit"
-	"github.com/smartcontractkit/chainlink/core/services/chainlink"
-	"github.com/smartcontractkit/chainlink/core/web/presenters"
+	"github.com/smartcontractkit/chainlink/v2/core/logger/audit"
+	"github.com/smartcontractkit/chainlink/v2/core/services/chainlink"
+	"github.com/smartcontractkit/chainlink/v2/core/web/presenters"
 )
 
 // LogController manages the logger config
@@ -27,10 +27,10 @@ type LogPatchRequest struct {
 func (cc *LogController) Get(c *gin.Context) {
 	var svcs, lvls []string
 	svcs = append(svcs, "Global")
-	lvls = append(lvls, cc.App.GetConfig().LogLevel().String())
+	lvls = append(lvls, cc.App.GetConfig().Log().Level().String())
 
 	svcs = append(svcs, "IsSqlEnabled")
-	lvls = append(lvls, strconv.FormatBool(cc.App.GetConfig().LogSQL()))
+	lvls = append(lvls, strconv.FormatBool(cc.App.GetConfig().Database().LogSQL()))
 
 	response := &presenters.ServiceLogConfigResource{
 		JAID: presenters.JAID{
@@ -38,7 +38,7 @@ func (cc *LogController) Get(c *gin.Context) {
 		},
 		ServiceName:     svcs,
 		LogLevel:        lvls,
-		DefaultLogLevel: cc.App.GetConfig().DefaultLogLevel().String(),
+		DefaultLogLevel: cc.App.GetConfig().Log().DefaultLevel().String(),
 	}
 
 	jsonAPIResponse(c, response, "log")
@@ -74,14 +74,14 @@ func (cc *LogController) Patch(c *gin.Context) {
 		}
 	}
 	svcs = append(svcs, "Global")
-	lvls = append(lvls, cc.App.GetConfig().LogLevel().String())
+	lvls = append(lvls, cc.App.GetConfig().Log().Level().String())
 
 	if request.SqlEnabled != nil {
 		cc.App.GetConfig().SetLogSQL(*request.SqlEnabled)
 	}
 
 	svcs = append(svcs, "IsSqlEnabled")
-	lvls = append(lvls, strconv.FormatBool(cc.App.GetConfig().LogSQL()))
+	lvls = append(lvls, strconv.FormatBool(cc.App.GetConfig().Database().LogSQL()))
 
 	response := &presenters.ServiceLogConfigResource{
 		JAID: presenters.JAID{

@@ -16,11 +16,13 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/olekukonko/tablewriter"
-	ocrtypes "github.com/smartcontractkit/libocr/offchainreporting2/types"
-	"github.com/smartcontractkit/ocr2keepers/pkg/chain"
-	plugintypes "github.com/smartcontractkit/ocr2keepers/pkg/types"
 
-	"github.com/smartcontractkit/chainlink/core/gethwrappers/generated/keeper_registry_wrapper2_0"
+	ocrtypes "github.com/smartcontractkit/libocr/offchainreporting2plus/types"
+
+	ocr2keepers20 "github.com/smartcontractkit/chainlink-automation/pkg/v2"
+
+	"github.com/smartcontractkit/chainlink/v2/core/gethwrappers/generated/keeper_registry_wrapper2_0"
+	evm "github.com/smartcontractkit/chainlink/v2/core/services/ocr2/plugins/ocr2keeper/evmregistry/v20"
 )
 
 type OCR2ReportDataElem struct {
@@ -83,24 +85,26 @@ func OCR2AutomationReports(hdlr *baseHandler, txs []string) error {
 	}
 
 	txRes, txErr, err = getSimulationsForTxs(hdlr, simBatch)
+	if err != nil {
+		return err
+	}
 	for i := range txRes {
 		if txErr[i] == nil {
 			continue
 		}
 
-		err, ok := txErr[i].(JsonError)
+		err2, ok := txErr[i].(JsonError) //nolint:errorlint
 		if ok {
-			decoded, err := hexutil.Decode(err.ErrorData().(string))
+			decoded, err := hexutil.Decode(err2.ErrorData().(string))
 			if err != nil {
 				elements[i].Err = err.Error()
 				continue
 			}
 
 			elements[i].Err = ocr2Txs[i].DecodeError(decoded)
-		} else if err != nil {
-			elements[i].Err = err.Error()
+		} else if err2 != nil {
+			elements[i].Err = err2.Error()
 		}
-
 	}
 
 	data := make([][]string, len(elements))
@@ -203,18 +207,18 @@ func NewOCR2Transaction(raw map[string]interface{}) (*OCR2Transaction, error) {
 	}
 
 	return &OCR2Transaction{
-		encoder: chain.NewEVMReportEncoder(),
+		encoder: evm.EVMAutomationEncoder20{},
 		abi:     contract,
 		raw:     raw,
-		tx:      tx,
+		tx:      &tx,
 	}, nil
 }
 
 type OCR2Transaction struct {
-	encoder plugintypes.ReportEncoder
+	encoder evm.EVMAutomationEncoder20
 	abi     abi.ABI
 	raw     map[string]interface{}
-	tx      types.Transaction
+	tx      *types.Transaction
 }
 
 func (t *OCR2Transaction) TransactionHash() common.Hash {
@@ -233,15 +237,12 @@ func (t *OCR2Transaction) BlockNumber() (uint64, error) {
 			block, err := hexutil.DecodeUint64(blStr)
 			if err != nil {
 				return 0, fmt.Errorf("failed to parse block number: %s", err)
-			} else {
-				return block, nil
 			}
-		} else {
-			return 0, fmt.Errorf("not a string")
+			return block, nil
 		}
-	} else {
-		return 0, fmt.Errorf("not found")
+		return 0, fmt.Errorf("not a string")
 	}
+	return 0, fmt.Errorf("not found")
 }
 
 func (t *OCR2Transaction) To() *common.Address {
@@ -249,14 +250,13 @@ func (t *OCR2Transaction) To() *common.Address {
 }
 
 func (t *OCR2Transaction) From() (common.Address, error) {
-
 	switch t.tx.Type() {
 	case 2:
-		msg, err := t.tx.AsMessage(types.NewLondonSigner(t.tx.ChainId()), big.NewInt(1))
+		from, err := types.Sender(types.NewLondonSigner(t.tx.ChainId()), t.tx)
 		if err != nil {
 			return common.Address{}, fmt.Errorf("failed to get from addr: %s", err)
 		} else {
-			return msg.From(), nil
+			return from, nil
 		}
 	}
 
@@ -276,7 +276,7 @@ func (t *OCR2Transaction) DecodeError(b []byte) string {
 		}
 	}
 
-	return fmt.Sprintf("%s", j)
+	return j
 }
 
 func NewOCR2TransmitTx(raw map[string]interface{}) (*OCR2TransmitTx, error) {
@@ -294,8 +294,7 @@ type OCR2TransmitTx struct {
 	OCR2Transaction
 }
 
-func (t *OCR2TransmitTx) UpkeepsInTransmit() ([]plugintypes.UpkeepResult, error) {
-
+func (t *OCR2TransmitTx) UpkeepsInTransmit() ([]ocr2keepers20.UpkeepResult, error) {
 	txData := t.tx.Data()
 
 	// recover Method from signature and ABI
@@ -333,17 +332,15 @@ func (t *OCR2TransmitTx) SetStaticValues(elem *OCR2ReportDataElem) {
 	if err != nil {
 		elem.Err = err.Error()
 		return
-	} else {
-		elem.From = from.String()
 	}
+	elem.From = from.String()
 
 	block, err := t.BlockNumber()
 	if err != nil {
 		elem.Err = err.Error()
 		return
-	} else {
-		elem.BlockNumber = fmt.Sprintf("%d", block)
 	}
+	elem.BlockNumber = fmt.Sprintf("%d", block)
 
 	upkeeps, err := t.UpkeepsInTransmit()
 	if err != nil {
@@ -352,18 +349,22 @@ func (t *OCR2TransmitTx) SetStaticValues(elem *OCR2ReportDataElem) {
 
 	keys := []string{}
 	chkBlocks := []string{}
-	for _, u := range upkeeps {
-		parts := strings.Split(string(u.Key), "|")
 
-		keys = append(keys, parts[1])
-		chkBlocks = append(chkBlocks, fmt.Sprintf("%d", u.CheckBlockNumber))
+	for _, u := range upkeeps {
+		val, ok := u.(evm.EVMAutomationUpkeepResult20)
+		if !ok {
+			panic("unrecognized upkeep result type")
+		}
+
+		keys = append(keys, val.ID.String())
+		chkBlocks = append(chkBlocks, fmt.Sprintf("%d", val.CheckBlockNumber))
 	}
+
 	elem.PerformKeys = strings.Join(keys, "\n")
 	elem.PerformBlockChecks = strings.Join(chkBlocks, "\n")
 }
 
 func (t *OCR2TransmitTx) BatchElem() (rpc.BatchElem, error) {
-
 	bn, err := t.BlockNumber()
 	if err != nil {
 		return rpc.BatchElem{}, err

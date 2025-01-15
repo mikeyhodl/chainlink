@@ -6,138 +6,141 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/smartcontractkit/chainlink/core/assets"
-	"github.com/smartcontractkit/chainlink/core/chains/evm/gas"
-	"github.com/smartcontractkit/chainlink/core/chains/evm/gas/mocks"
-	"github.com/smartcontractkit/chainlink/core/internal/testutils"
-	"github.com/smartcontractkit/chainlink/core/logger"
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
+	"github.com/smartcontractkit/chainlink-common/pkg/utils/tests"
+
+	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/assets"
+	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/gas"
+	rollupMocks "github.com/smartcontractkit/chainlink/v2/core/chains/evm/gas/rollups/mocks"
 )
+
+type blockHistoryConfig struct {
+	v uint16
+}
+
+func (b *blockHistoryConfig) EIP1559FeeCapBufferBlocks() uint16 {
+	return b.v
+}
 
 func Test_FixedPriceEstimator(t *testing.T) {
 	t.Parallel()
 	maxGasPrice := assets.NewWeiI(1000000)
 
-	t.Run("GetLegacyGas returns EvmGasPriceDefault from config, with multiplier applied", func(t *testing.T) {
-		config := mocks.NewConfig(t)
-		f := gas.NewFixedPriceEstimator(config, logger.TestLogger(t))
+	t.Run("GetLegacyGas returns EvmGasPriceDefault from config", func(t *testing.T) {
+		config := &gas.MockGasEstimatorConfig{}
+		l1Oracle := rollupMocks.NewL1Oracle(t)
 
-		config.On("EvmGasPriceDefault").Return(assets.NewWeiI(42))
-		config.On("EvmGasLimitMultiplier").Return(float32(1.1))
-		config.On("EvmMaxGasPriceWei").Return(maxGasPrice)
+		f := gas.NewFixedPriceEstimator(config, nil, &blockHistoryConfig{}, logger.Test(t), l1Oracle)
 
-		gasPrice, gasLimit, err := f.GetLegacyGas(testutils.Context(t), nil, 100000, maxGasPrice)
+		config.PriceDefaultF = assets.NewWeiI(42)
+		config.PriceMaxF = maxGasPrice
+
+		gasPrice, gasLimit, err := f.GetLegacyGas(tests.Context(t), nil, 100000, maxGasPrice)
 		require.NoError(t, err)
-		assert.Equal(t, 110000, int(gasLimit))
+		assert.Equal(t, 100000, int(gasLimit))
 		assert.Equal(t, assets.NewWeiI(42), gasPrice)
 	})
 
 	t.Run("GetLegacyGas returns user specified maximum gas price", func(t *testing.T) {
-		config := mocks.NewConfig(t)
-		f := gas.NewFixedPriceEstimator(config, logger.TestLogger(t))
+		config := &gas.MockGasEstimatorConfig{}
+		config.PriceDefaultF = assets.NewWeiI(42)
+		config.PriceMaxF = assets.NewWeiI(35)
+		l1Oracle := rollupMocks.NewL1Oracle(t)
 
-		config.On("EvmGasPriceDefault").Return(assets.NewWeiI(42))
-		config.On("EvmGasLimitMultiplier").Return(float32(1.1))
-		config.On("EvmMaxGasPriceWei").Return(assets.NewWeiI(35))
+		f := gas.NewFixedPriceEstimator(config, nil, &blockHistoryConfig{}, logger.Test(t), l1Oracle)
 
-		gasPrice, gasLimit, err := f.GetLegacyGas(testutils.Context(t), nil, 100000, assets.NewWeiI(30))
+		gasPrice, gasLimit, err := f.GetLegacyGas(tests.Context(t), nil, 100000, assets.NewWeiI(30))
 		require.NoError(t, err)
-		assert.Equal(t, 110000, int(gasLimit))
+		assert.Equal(t, 100000, int(gasLimit))
 		assert.Equal(t, assets.NewWeiI(30), gasPrice)
 	})
 
 	t.Run("GetLegacyGas returns global maximum gas price", func(t *testing.T) {
-		config := mocks.NewConfig(t)
-		f := gas.NewFixedPriceEstimator(config, logger.TestLogger(t))
+		config := &gas.MockGasEstimatorConfig{}
+		config.PriceDefaultF = assets.NewWeiI(42)
+		config.PriceMaxF = assets.NewWeiI(20)
+		l1Oracle := rollupMocks.NewL1Oracle(t)
 
-		config.On("EvmGasPriceDefault").Return(assets.NewWeiI(42))
-		config.On("EvmGasLimitMultiplier").Return(float32(1.1))
-		config.On("EvmMaxGasPriceWei").Return(assets.NewWeiI(20))
-
-		gasPrice, gasLimit, err := f.GetLegacyGas(testutils.Context(t), nil, 100000, assets.NewWeiI(30))
+		f := gas.NewFixedPriceEstimator(config, nil, &blockHistoryConfig{}, logger.Test(t), l1Oracle)
+		gasPrice, gasLimit, err := f.GetLegacyGas(tests.Context(t), nil, 100000, assets.NewWeiI(30))
 		require.NoError(t, err)
-		assert.Equal(t, 110000, int(gasLimit))
+		assert.Equal(t, 100000, int(gasLimit))
 		assert.Equal(t, assets.NewWeiI(20), gasPrice)
 	})
 
 	t.Run("BumpLegacyGas calls BumpLegacyGasPriceOnly", func(t *testing.T) {
-		config := mocks.NewConfig(t)
-		lggr := logger.TestLogger(t)
-		f := gas.NewFixedPriceEstimator(config, lggr)
+		config := &gas.MockGasEstimatorConfig{}
+		config.PriceDefaultF = assets.NewWeiI(42)
+		config.PriceMaxF = maxGasPrice
+		config.BumpPercentF = uint16(10)
+		config.BumpMinF = assets.NewWeiI(150)
+		l1Oracle := rollupMocks.NewL1Oracle(t)
 
-		config.On("EvmGasPriceDefault").Return(assets.NewWeiI(42))
-		config.On("EvmGasBumpPercent").Return(uint16(10))
-		config.On("EvmGasBumpWei").Return(assets.NewWeiI(150))
-		config.On("EvmMaxGasPriceWei").Return(maxGasPrice)
-		config.On("EvmGasLimitMultiplier").Return(float32(1.1))
+		lggr := logger.TestSugared(t)
+		f := gas.NewFixedPriceEstimator(config, nil, &blockHistoryConfig{}, lggr, l1Oracle)
 
-		gasPrice, gasLimit, err := f.BumpLegacyGas(testutils.Context(t), assets.NewWeiI(42), 100000, maxGasPrice, nil)
+		gasPrice, gasLimit, err := f.BumpLegacyGas(tests.Context(t), assets.NewWeiI(42), 100000, maxGasPrice, nil)
 		require.NoError(t, err)
 
-		expectedGasPrice, expectedGasLimit, err := gas.BumpLegacyGasPriceOnly(config, lggr, nil, assets.NewWeiI(42), 100000, maxGasPrice)
+		expectedGasPrice, err := gas.BumpLegacyGasPriceOnly(config, lggr, nil, assets.NewWeiI(42), maxGasPrice)
 		require.NoError(t, err)
 
-		assert.Equal(t, expectedGasLimit, gasLimit)
+		assert.Equal(t, 100000, int(gasLimit))
 		assert.Equal(t, expectedGasPrice, gasPrice)
 	})
 
-	t.Run("GetDynamicFee returns defaults from config, with multiplier applied", func(t *testing.T) {
-		config := mocks.NewConfig(t)
-		lggr := logger.TestLogger(t)
-		f := gas.NewFixedPriceEstimator(config, lggr)
+	t.Run("GetDynamicFee returns defaults from config", func(t *testing.T) {
+		config := &gas.MockGasEstimatorConfig{}
+		config.PriceMaxF = maxGasPrice
+		config.TipCapDefaultF = assets.NewWeiI(52)
+		config.FeeCapDefaultF = assets.NewWeiI(100)
+		config.BumpThresholdF = uint64(3)
+		l1Oracle := rollupMocks.NewL1Oracle(t)
 
-		config.On("EvmGasLimitMultiplier").Return(float32(1.1))
-		config.On("EvmGasTipCapDefault").Return(assets.NewWeiI(52))
-		config.On("EvmGasFeeCapDefault").Return(assets.NewWeiI(100))
-		config.On("EvmMaxGasPriceWei").Return(maxGasPrice)
+		lggr := logger.Test(t)
+		f := gas.NewFixedPriceEstimator(config, nil, &blockHistoryConfig{}, lggr, l1Oracle)
 
-		// Gas bumping enabled
-		config.On("EvmGasBumpThreshold").Return(uint64(3)).Once()
-
-		fee, gasLimit, err := f.GetDynamicFee(testutils.Context(t), 100000, maxGasPrice)
+		fee, err := f.GetDynamicFee(tests.Context(t), maxGasPrice)
 		require.NoError(t, err)
-		assert.Equal(t, 110000, int(gasLimit))
 
-		assert.Equal(t, assets.NewWeiI(52), fee.TipCap)
-		assert.Equal(t, assets.NewWeiI(100), fee.FeeCap)
+		assert.Equal(t, assets.NewWeiI(52), fee.GasTipCap)
+		assert.Equal(t, assets.NewWeiI(100), fee.GasFeeCap)
 
 		// Gas bumping disabled
-		config.On("EvmGasBumpThreshold").Return(uint64(0))
+		config.BumpThresholdF = uint64(0)
 
-		fee, gasLimit, err = f.GetDynamicFee(testutils.Context(t), 100000, maxGasPrice)
+		fee, err = f.GetDynamicFee(tests.Context(t), maxGasPrice)
 		require.NoError(t, err)
-		assert.Equal(t, 110000, int(gasLimit))
 
-		assert.Equal(t, assets.NewWeiI(52), fee.TipCap)
-		assert.Equal(t, maxGasPrice, fee.FeeCap)
+		assert.Equal(t, assets.NewWeiI(52), fee.GasTipCap)
+		assert.Equal(t, maxGasPrice, fee.GasFeeCap)
 
 		// override max gas price
-		fee, gasLimit, err = f.GetDynamicFee(testutils.Context(t), 100000, assets.NewWeiI(10))
+		fee, err = f.GetDynamicFee(tests.Context(t), assets.NewWeiI(10))
 		require.NoError(t, err)
-		assert.Equal(t, 110000, int(gasLimit))
 
-		assert.Equal(t, assets.NewWeiI(52), fee.TipCap)
-		assert.Equal(t, assets.NewWeiI(10), fee.FeeCap)
+		assert.Equal(t, assets.NewWeiI(52), fee.GasTipCap)
+		assert.Equal(t, assets.NewWeiI(10), fee.GasFeeCap)
 	})
 
 	t.Run("BumpDynamicFee calls BumpDynamicFeeOnly", func(t *testing.T) {
-		config := mocks.NewConfig(t)
-		lggr := logger.TestLogger(t)
-		f := gas.NewFixedPriceEstimator(config, lggr)
+		config := &gas.MockGasEstimatorConfig{}
+		config.PriceMaxF = maxGasPrice
+		config.TipCapDefaultF = assets.NewWeiI(52)
+		config.BumpMinF = assets.NewWeiI(150)
+		config.BumpPercentF = uint16(10)
+		l1Oracle := rollupMocks.NewL1Oracle(t)
 
-		config.On("EvmGasBumpPercent").Return(uint16(10))
-		config.On("EvmGasBumpWei").Return(assets.NewWeiI(150))
-		config.On("EvmMaxGasPriceWei").Return(maxGasPrice)
-		config.On("EvmGasLimitMultiplier").Return(float32(1.1))
-		config.On("EvmGasTipCapDefault").Return(assets.NewWeiI(52))
+		lggr := logger.TestSugared(t)
+		f := gas.NewFixedPriceEstimator(config, nil, &blockHistoryConfig{}, lggr, l1Oracle)
 
-		originalFee := gas.DynamicFee{FeeCap: assets.NewWeiI(100), TipCap: assets.NewWeiI(25)}
-		fee, gasLimit, err := f.BumpDynamicFee(testutils.Context(t), originalFee, 100000, maxGasPrice, nil)
+		originalFee := gas.DynamicFee{GasFeeCap: assets.NewWeiI(100), GasTipCap: assets.NewWeiI(25)}
+		fee, err := f.BumpDynamicFee(tests.Context(t), originalFee, maxGasPrice, nil)
 		require.NoError(t, err)
 
-		expectedFee, expectedGasLimit, err := gas.BumpDynamicFeeOnly(config, lggr, nil, nil, originalFee, 100000, maxGasPrice)
+		expectedFee, err := gas.BumpDynamicFeeOnly(config, 0, lggr, nil, nil, originalFee, maxGasPrice)
 		require.NoError(t, err)
 
-		assert.Equal(t, expectedGasLimit, gasLimit)
 		assert.Equal(t, expectedFee, fee)
 	})
 }

@@ -4,6 +4,7 @@ package gethwrappers
 
 import (
 	"crypto/sha256"
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,7 +15,10 @@ import (
 	gethParams "github.com/ethereum/go-ethereum/params"
 	"github.com/fatih/color"
 
-	"github.com/smartcontractkit/chainlink/core/utils"
+	cutils "github.com/smartcontractkit/chainlink-common/pkg/utils"
+	"github.com/smartcontractkit/chainlink-common/pkg/utils/tests"
+
+	"github.com/smartcontractkit/chainlink/v2/core/utils"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -26,6 +30,7 @@ const compileCommand = "../../contracts/scripts/native_solc_compile_all"
 // contract artifacts in contracts/solc with the abi and bytecode stored in the
 // contract wrapper
 func TestCheckContractHashesFromLastGoGenerate(t *testing.T) {
+	tests.SkipShort(t, "requires compiled artifacts")
 	versions, err := ReadVersionsDB()
 	require.NoError(t, err)
 	require.NotEmpty(t, versions.GethVersion, `version DB should have a "GETH_VERSION:" line`)
@@ -62,19 +67,13 @@ func isVRFV2Contract(fullpath string) bool {
 	return strings.Contains(fullpath, "VRFCoordinatorV2")
 }
 
-// rootDir is the local chainlink root working directory
-var rootDir string
-
-func init() { // compute rootDir
-	var err error
-	thisDir, err := os.Getwd()
+// getRootDir returns the local chainlink root working directory
+func getRootDir() (string, error) { // compute rootDir
+	wd, err := os.Getwd()
 	if err != nil {
-		panic(err)
+		return "", fmt.Errorf("failed to get working directory: %w", err)
 	}
-	rootDir, err = filepath.Abs(filepath.Join(thisDir, "../.."))
-	if err != nil {
-		panic(err)
-	}
+	return filepath.Abs(filepath.Join(wd, "../.."))
 }
 
 // compareCurrentCompilerArtifactAgainstRecordsAndSoliditySources checks that
@@ -94,16 +93,26 @@ func compareCurrentCompilerArtifactAgainstRecordsAndSoliditySources(
 	t *testing.T, versionInfo ContractVersion,
 ) {
 	hash := VersionHash(versionInfo.AbiPath, versionInfo.BinaryPath)
-	recompileCommand := fmt.Sprintf("(cd %s; make go-solidity-wrappers)", rootDir)
+	rootDir, err := getRootDir()
+	require.NoError(t, err)
+	recompileCommand := fmt.Sprintf("(cd %s/contracts; make wrappers-all)", rootDir)
 	assert.Equal(t, versionInfo.Hash, hash,
 		utils.BoxOutput(`compiled %s and/or %s has changed; please rerun
 %s,
 and commit the changes`, versionInfo.AbiPath, versionInfo.BinaryPath, recompileCommand))
 }
 
+func TestMain(m *testing.M) {
+	flag.Parse()
+	if !testing.Short() {
+		ensureArtifacts()
+	}
+	os.Exit(m.Run())
+}
+
 // Ensure that solidity compiler artifacts are present before running this test,
 // by compiling them if necessary.
-func init() {
+func ensureArtifacts() {
 	db, err := versionsDBLineReader()
 	if err != nil {
 		panic(err)
@@ -112,7 +121,7 @@ func init() {
 	for db.Scan() {
 		line := strings.Fields(db.Text())
 		if stripTrailingColon(line[0], "") != "GETH_VERSION" {
-			if os.IsNotExist(utils.JustError(os.Stat(line[1]))) {
+			if os.IsNotExist(cutils.JustError(os.Stat(line[1]))) {
 				solidityArtifactsMissing = append(solidityArtifactsMissing, line[1])
 			}
 		}
@@ -122,7 +131,7 @@ func init() {
 	}
 	fmt.Printf("some solidity artifacts missing (%s); rebuilding...",
 		solidityArtifactsMissing)
-	// Don't want to run "make go-solidity-wrappers" here, because that would
+	// Don't want to run "make wrappers-all" here, because that would
 	// result in an infinite loop
 	cmd := exec.Command("bash", "-c", compileCommand)
 	cmd.Stdout = os.Stdout
@@ -137,12 +146,11 @@ func getProjectRoot(t *testing.T) (rootPath string) {
 	root, err := os.Getwd()
 	require.NoError(t, err, "could not get current working directory")
 	for root != "/" { // Walk up path to find dir containing go.mod
-		if _, err := os.Stat(filepath.Join(root, "go.mod")); os.IsNotExist(err) {
-			root = filepath.Dir(root)
-		} else {
+		if _, err := os.Stat(filepath.Join(root, "go.mod")); !os.IsNotExist(err) {
 			return root
 		}
+		root = filepath.Dir(root)
 	}
 	t.Fatal("could not find project root")
-	panic("can't get here") // Appease staticcheck
+	return
 }

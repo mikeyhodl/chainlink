@@ -1,5 +1,4 @@
-name: Setup Postgres for GHA
-version: "3.8"
+name: gha_postgres
 services:
   postgres:
     ports:
