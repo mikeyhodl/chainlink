@@ -11,12 +11,13 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/urfave/cli"
 
-	"github.com/smartcontractkit/chainlink/core/cmd"
-	"github.com/smartcontractkit/chainlink/core/internal/cltest"
-	"github.com/smartcontractkit/chainlink/core/services/chainlink"
-	"github.com/smartcontractkit/chainlink/core/services/keystore/keys/ocrkey"
-	"github.com/smartcontractkit/chainlink/core/utils"
-	"github.com/smartcontractkit/chainlink/core/web/presenters"
+	"github.com/smartcontractkit/chainlink-common/pkg/utils"
+	"github.com/smartcontractkit/chainlink/v2/core/cmd"
+	"github.com/smartcontractkit/chainlink/v2/core/internal/cltest"
+	"github.com/smartcontractkit/chainlink/v2/core/internal/testutils"
+	"github.com/smartcontractkit/chainlink/v2/core/services/chainlink"
+	"github.com/smartcontractkit/chainlink/v2/core/services/keystore/keys/ocrkey"
+	"github.com/smartcontractkit/chainlink/v2/core/web/presenters"
 )
 
 func TestOCRKeyBundlePresenter_RenderTable(t *testing.T) {
@@ -63,13 +64,14 @@ func TestOCRKeyBundlePresenter_RenderTable(t *testing.T) {
 	assert.Contains(t, output, hex.EncodeToString(pubKeyConfig[:]))
 }
 
-func TestClient_ListOCRKeyBundles(t *testing.T) {
+func TestShell_ListOCRKeyBundles(t *testing.T) {
 	t.Parallel()
+	ctx := testutils.Context(t)
 
 	app := startNewApplicationV2(t, nil)
-	client, r := app.NewClientAndRenderer()
+	client, r := app.NewShellAndRenderer()
 
-	key, err := app.GetKeyStore().OCR().Create()
+	key, err := app.GetKeyStore().OCR().Create(ctx)
 	require.NoError(t, err)
 
 	requireOCRKeyCount(t, app, 1)
@@ -80,11 +82,11 @@ func TestClient_ListOCRKeyBundles(t *testing.T) {
 	require.Equal(t, key.ID(), output[0].ID)
 }
 
-func TestClient_CreateOCRKeyBundle(t *testing.T) {
+func TestShell_CreateOCRKeyBundle(t *testing.T) {
 	t.Parallel()
 
 	app := startNewApplicationV2(t, nil)
-	client, r := app.NewClientAndRenderer()
+	client, r := app.NewShellAndRenderer()
 
 	requireOCRKeyCount(t, app, 0)
 
@@ -99,19 +101,20 @@ func TestClient_CreateOCRKeyBundle(t *testing.T) {
 	require.Equal(t, output.ID, keys[0].ID())
 }
 
-func TestClient_DeleteOCRKeyBundle(t *testing.T) {
+func TestShell_DeleteOCRKeyBundle(t *testing.T) {
 	t.Parallel()
+	ctx := testutils.Context(t)
 
 	app := startNewApplicationV2(t, nil)
-	client, r := app.NewClientAndRenderer()
+	client, r := app.NewShellAndRenderer()
 
-	key, err := app.GetKeyStore().OCR().Create()
+	key, err := app.GetKeyStore().OCR().Create(ctx)
 	require.NoError(t, err)
 
 	requireOCRKeyCount(t, app, 1)
 
 	set := flag.NewFlagSet("test", 0)
-	cltest.FlagSetApplyFromAction(client.DeleteOCRKeyBundle, set, "")
+	flagSetApplyFromAction(client.DeleteOCRKeyBundle, set, "")
 
 	require.NoError(t, set.Parse([]string{key.ID()}))
 	require.NoError(t, set.Set("yes", "true"))
@@ -126,13 +129,14 @@ func TestClient_DeleteOCRKeyBundle(t *testing.T) {
 	assert.Equal(t, key.ID(), output.ID)
 }
 
-func TestClient_ImportExportOCRKey(t *testing.T) {
+func TestShell_ImportExportOCRKey(t *testing.T) {
 	defer deleteKeyExportFile(t)
+	ctx := testutils.Context(t)
 
 	app := startNewApplicationV2(t, nil)
-	client, _ := app.NewClientAndRenderer()
+	client, _ := app.NewShellAndRenderer()
 
-	require.NoError(t, app.KeyStore.OCR().Add(cltest.DefaultOCRKey))
+	require.NoError(t, app.KeyStore.OCR().Add(ctx, cltest.DefaultOCRKey))
 
 	keys := requireOCRKeyCount(t, app, 1)
 	key := keys[0]
@@ -140,10 +144,10 @@ func TestClient_ImportExportOCRKey(t *testing.T) {
 
 	// Export test invalid id
 	set := flag.NewFlagSet("test OCR export", 0)
-	cltest.FlagSetApplyFromAction(client.ExportOCRKey, set, "")
+	flagSetApplyFromAction(client.ExportOCRKey, set, "")
 
 	require.NoError(t, set.Parse([]string{"0"}))
-	require.NoError(t, set.Set("newpassword", "../internal/fixtures/new_password.txt"))
+	require.NoError(t, set.Set("new-password", "../internal/fixtures/new_password.txt"))
 	require.NoError(t, set.Set("output", keyName))
 
 	c := cli.NewContext(nil, set, nil)
@@ -153,10 +157,10 @@ func TestClient_ImportExportOCRKey(t *testing.T) {
 
 	// Export
 	set = flag.NewFlagSet("test OCR export", 0)
-	cltest.FlagSetApplyFromAction(client.ExportOCRKey, set, "")
+	flagSetApplyFromAction(client.ExportOCRKey, set, "")
 
 	require.NoError(t, set.Parse([]string{key.ID()}))
-	require.NoError(t, set.Set("newpassword", "../internal/fixtures/new_password.txt"))
+	require.NoError(t, set.Set("new-password", "../internal/fixtures/new_password.txt"))
 	require.NoError(t, set.Set("output", keyName))
 
 	c = cli.NewContext(nil, set, nil)
@@ -164,14 +168,14 @@ func TestClient_ImportExportOCRKey(t *testing.T) {
 	require.NoError(t, client.ExportOCRKey(c))
 	require.NoError(t, utils.JustError(os.Stat(keyName)))
 
-	require.NoError(t, utils.JustError(app.GetKeyStore().OCR().Delete(key.ID())))
+	require.NoError(t, utils.JustError(app.GetKeyStore().OCR().Delete(ctx, key.ID())))
 	requireOCRKeyCount(t, app, 0)
 
 	set = flag.NewFlagSet("test OCR import", 0)
-	cltest.FlagSetApplyFromAction(client.ImportOCRKey, set, "")
+	flagSetApplyFromAction(client.ImportOCRKey, set, "")
 
 	require.NoError(t, set.Parse([]string{keyName}))
-	require.NoError(t, set.Set("oldpassword", "../internal/fixtures/new_password.txt"))
+	require.NoError(t, set.Set("old-password", "../internal/fixtures/new_password.txt"))
 
 	c = cli.NewContext(nil, set, nil)
 	require.NoError(t, client.ImportOCRKey(c))

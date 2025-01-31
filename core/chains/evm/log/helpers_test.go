@@ -5,72 +5,63 @@ import (
 	"fmt"
 	"math/big"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/google/uuid"
 	"github.com/onsi/gomega"
-	uuid "github.com/satori/go.uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/atomic"
 
-	"github.com/smartcontractkit/sqlx"
+	"github.com/jmoiron/sqlx"
 
-	evmclient "github.com/smartcontractkit/chainlink/core/chains/evm/client"
-	evmconfig "github.com/smartcontractkit/chainlink/core/chains/evm/config"
-	"github.com/smartcontractkit/chainlink/core/chains/evm/log"
-	logmocks "github.com/smartcontractkit/chainlink/core/chains/evm/log/mocks"
-	evmmocks "github.com/smartcontractkit/chainlink/core/chains/evm/mocks"
-	evmtypes "github.com/smartcontractkit/chainlink/core/chains/evm/types"
-	"github.com/smartcontractkit/chainlink/core/config"
-	"github.com/smartcontractkit/chainlink/core/gethwrappers/generated"
-	"github.com/smartcontractkit/chainlink/core/gethwrappers/generated/flux_aggregator_wrapper"
-	"github.com/smartcontractkit/chainlink/core/internal/cltest"
-	"github.com/smartcontractkit/chainlink/core/internal/testutils"
-	configtest "github.com/smartcontractkit/chainlink/core/internal/testutils/configtest/v2"
-	"github.com/smartcontractkit/chainlink/core/internal/testutils/evmtest"
-	"github.com/smartcontractkit/chainlink/core/internal/testutils/pgtest"
-	"github.com/smartcontractkit/chainlink/core/logger"
-	"github.com/smartcontractkit/chainlink/core/services/chainlink"
-	"github.com/smartcontractkit/chainlink/core/services/job"
-	"github.com/smartcontractkit/chainlink/core/services/pg"
-	"github.com/smartcontractkit/chainlink/core/services/pipeline"
-	"github.com/smartcontractkit/chainlink/core/services/srvctest"
-	"github.com/smartcontractkit/chainlink/core/utils"
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
+	"github.com/smartcontractkit/chainlink-common/pkg/services/servicetest"
+	"github.com/smartcontractkit/chainlink-common/pkg/utils/mailbox/mailboxtest"
+
+	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/log"
+	logmocks "github.com/smartcontractkit/chainlink/v2/core/chains/evm/log/mocks"
+	"github.com/smartcontractkit/chainlink/v2/core/chains/legacyevm"
+	"github.com/smartcontractkit/chainlink/v2/core/config"
+	"github.com/smartcontractkit/chainlink/v2/core/gethwrappers/generated"
+	"github.com/smartcontractkit/chainlink/v2/core/gethwrappers/generated/flux_aggregator_wrapper"
+	"github.com/smartcontractkit/chainlink/v2/core/internal/cltest"
+
+	"github.com/smartcontractkit/chainlink/v2/core/internal/testutils/configtest"
+	"github.com/smartcontractkit/chainlink/v2/core/internal/testutils/evmtest"
+	"github.com/smartcontractkit/chainlink/v2/core/services/chainlink"
+	"github.com/smartcontractkit/chainlink/v2/core/services/job"
+	"github.com/smartcontractkit/chainlink/v2/core/services/pipeline"
+	evmclient "github.com/smartcontractkit/chainlink/v2/evm/client"
+	"github.com/smartcontractkit/chainlink/v2/evm/client/clienttest"
+	evmconfig "github.com/smartcontractkit/chainlink/v2/evm/config"
+	"github.com/smartcontractkit/chainlink/v2/evm/testutils"
+	evmtypes "github.com/smartcontractkit/chainlink/v2/evm/types"
 )
 
 type broadcasterHelper struct {
 	t            *testing.T
 	lb           log.BroadcasterInTest
 	db           *sqlx.DB
-	mockEth      *evmtest.MockEth
-	globalConfig config.BasicConfig
-	config       evmconfig.ChainScopedConfig
+	mockEth      *clienttest.MockEth
+	globalConfig config.AppConfig
+	config       evmconfig.EVM
 
 	// each received channel corresponds to one eth subscription
-	chchRawLogs    chan evmtest.RawSub[types.Log]
+	chchRawLogs    chan testutils.RawSub[types.Log]
 	toUnsubscribe  []func()
 	pipelineHelper cltest.JobPipelineV2TestHelper
 }
 
-func newBroadcasterHelper(t *testing.T, blockHeight int64, timesSubscribe int, overridesFn func(*chainlink.Config, *chainlink.Secrets)) *broadcasterHelper {
-	return broadcasterHelperCfg{}.new(t, blockHeight, timesSubscribe, nil, overridesFn)
-}
+func newBroadcasterHelper(t *testing.T, blockHeight int64, timesSubscribe int, filterLogsResult []types.Log, overridesFn func(*chainlink.Config, *chainlink.Secrets)) *broadcasterHelper {
+	// ensure we check before registering any mock Cleanup assertions
+	testutils.SkipShortDB(t)
 
-type broadcasterHelperCfg struct {
-	highestSeenHead *evmtypes.Head
-	db              *sqlx.DB
-}
-
-func (c broadcasterHelperCfg) new(t *testing.T, blockHeight int64, timesSubscribe int, filterLogsResult []types.Log, overridesFn func(*chainlink.Config, *chainlink.Secrets)) *broadcasterHelper {
-	if c.db == nil {
-		// ensure we check before registering any mock Cleanup assertions
-		testutils.SkipShortDB(t)
-	}
 	expectedCalls := mockEthClientExpectedCalls{
 		SubscribeFilterLogs: timesSubscribe,
 		HeaderByNumber:      1,
@@ -78,23 +69,15 @@ func (c broadcasterHelperCfg) new(t *testing.T, blockHeight int64, timesSubscrib
 		FilterLogsResult:    filterLogsResult,
 	}
 
-	chchRawLogs := make(chan evmtest.RawSub[types.Log], timesSubscribe)
+	chchRawLogs := make(chan testutils.RawSub[types.Log], timesSubscribe)
 	mockEth := newMockEthClient(t, chchRawLogs, blockHeight, expectedCalls)
-	helper := c.newWithEthClient(t, mockEth.EthClient, overridesFn)
+	helper := newBroadcasterHelperWithEthClient(t, mockEth.EthClient, nil, overridesFn)
 	helper.chchRawLogs = chchRawLogs
 	helper.mockEth = mockEth
 	return helper
 }
 
 func newBroadcasterHelperWithEthClient(t *testing.T, ethClient evmclient.Client, highestSeenHead *evmtypes.Head, overridesFn func(*chainlink.Config, *chainlink.Secrets)) *broadcasterHelper {
-	return broadcasterHelperCfg{highestSeenHead: highestSeenHead}.newWithEthClient(t, ethClient, overridesFn)
-}
-
-func (c broadcasterHelperCfg) newWithEthClient(t *testing.T, ethClient evmclient.Client, overridesFn func(*chainlink.Config, *chainlink.Secrets)) *broadcasterHelper {
-	if c.db == nil {
-		c.db = pgtest.NewSqlxDB(t)
-	}
-
 	globalConfig := configtest.NewGeneralConfig(t, func(c *chainlink.Config, s *chainlink.Secrets) {
 		c.Database.LogQueries = ptr(true)
 		finality := uint32(10)
@@ -103,28 +86,40 @@ func (c broadcasterHelperCfg) newWithEthClient(t *testing.T, ethClient evmclient
 		if overridesFn != nil {
 			overridesFn(c, s)
 		}
-	})
-	config := evmtest.NewChainScopedConfig(t, globalConfig)
-	lggr := logger.TestLogger(t)
-	mailMon := srvctest.Start(t, utils.NewMailboxMonitor(t.Name()))
+	}) //TODO make evm directly
+	config := evmtest.NewChainScopedConfig(t, globalConfig).EVM()
+	lggr := logger.Test(t)
+	mailMon := servicetest.Run(t, mailboxtest.NewMonitor(t))
 
-	orm := log.NewORM(c.db, lggr, config, cltest.FixtureChainID)
-	lb := log.NewTestBroadcaster(orm, ethClient, config, lggr, c.highestSeenHead, mailMon)
+	db := testutils.NewSqlxDB(t)
+	orm := log.NewORM(db, cltest.FixtureChainID)
+	lb := log.NewTestBroadcaster(orm, ethClient, config, lggr, highestSeenHead, mailMon)
+	kst := cltest.NewKeyStore(t, db)
 
-	cc := evmtest.NewChainSet(t, evmtest.TestChainOpts{
+	chainsAndConfig := evmtest.NewLegacyChainsAndConfig(t, evmtest.TestChainOpts{
 		Client:         ethClient,
 		GeneralConfig:  globalConfig,
-		DB:             c.db,
+		DatabaseConfig: globalConfig.Database(),
+		FeatureConfig:  globalConfig.Feature(),
+		ListenerConfig: globalConfig.Database().Listener(),
+		DB:             db,
+		KeyStore:       kst.Eth(),
 		LogBroadcaster: &log.NullBroadcaster{},
 		MailMon:        mailMon,
 	})
-	kst := cltest.NewKeyStore(t, c.db, globalConfig)
-	pipelineHelper := cltest.NewJobPipelineV2(t, config, cc, c.db, kst, nil, nil)
+
+	m := make(map[string]legacyevm.Chain)
+	for _, r := range chainsAndConfig.Slice() {
+		m[r.ID().String()] = r
+	}
+
+	legacyChains := chainsAndConfig.NewLegacyChains()
+	pipelineHelper := cltest.NewJobPipelineV2(t, globalConfig.WebServer(), globalConfig.JobPipeline(), legacyChains, db, kst, nil, nil)
 
 	return &broadcasterHelper{
 		t:              t,
 		lb:             lb,
-		db:             c.db,
+		db:             db,
 		globalConfig:   globalConfig,
 		config:         config,
 		pipelineHelper: pipelineHelper,
@@ -155,7 +150,6 @@ func (helper *broadcasterHelper) registerWithTopics(listener log.Listener, contr
 
 func (helper *broadcasterHelper) registerWithTopicValues(listener log.Listener, contract log.AbigenContract, numConfirmations uint32,
 	topics map[common.Hash][][]log.Topic) {
-
 	unsubscribe := helper.lb.Register(listener, log.ListenerOpts{
 		Contract:                 contract.Address(),
 		ParseLog:                 contract.ParseLog,
@@ -191,10 +185,10 @@ func (helper *broadcasterHelper) stop() {
 	assert.NoError(helper.t, err)
 }
 
-func newMockContract() *logmocks.AbigenContract {
+func newMockContract(t *testing.T) *logmocks.AbigenContract {
 	addr := testutils.NewAddress()
-	contract := new(logmocks.AbigenContract)
-	contract.On("Address").Return(addr)
+	contract := logmocks.NewAbigenContract(t)
+	contract.On("Address").Return(addr).Maybe()
 	return contract
 }
 
@@ -254,8 +248,7 @@ func (rec *received) logsOnBlocks() []logOnBlock {
 
 type simpleLogListener struct {
 	name                string
-	lggr                logger.Logger
-	cfg                 pg.QConfig
+	lggr                logger.SugaredLogger
 	received            *received
 	t                   *testing.T
 	db                  *sqlx.DB
@@ -271,16 +264,15 @@ func (helper *broadcasterHelper) newLogListenerWithJob(name string) *simpleLogLi
 		SchemaVersion: 1,
 		CronSpec:      &job.CronSpec{CronSchedule: "@every 1s"},
 		PipelineSpec:  &pipeline.Spec{},
-		ExternalJobID: uuid.NewV4(),
+		ExternalJobID: uuid.New(),
 	}
-	err := helper.pipelineHelper.Jrm.CreateJob(jb)
+	err := helper.pipelineHelper.Jrm.CreateJob(testutils.Context(t), jb)
 	require.NoError(t, err)
 
 	var rec received
 	return &simpleLogListener{
 		db:       db,
-		lggr:     logger.TestLogger(t),
-		cfg:      helper.config,
+		lggr:     logger.Sugared(logger.Test(t)),
 		name:     name,
 		received: &rec,
 		t:        t,
@@ -292,14 +284,14 @@ func (listener *simpleLogListener) SkipMarkingConsumed(skip bool) {
 	listener.skipMarkingConsumed.Store(skip)
 }
 
-func (listener *simpleLogListener) HandleLog(lb log.Broadcast) {
+func (listener *simpleLogListener) HandleLog(ctx context.Context, lb log.Broadcast) {
 	listener.received.Lock()
 	defer listener.received.Unlock()
 	listener.lggr.Tracef("Listener %v HandleLog for block %v %v received at %v %v", listener.name, lb.RawLog().BlockNumber, lb.RawLog().BlockHash, lb.LatestBlockNumber(), lb.LatestBlockHash())
 
 	listener.received.logs = append(listener.received.logs, lb.RawLog())
 	listener.received.broadcasts = append(listener.received.broadcasts, lb)
-	consumed := listener.handleLogBroadcast(lb)
+	consumed := listener.handleLogBroadcast(ctx, lb)
 
 	if !consumed {
 		listener.received.uniqueLogs = append(listener.received.uniqueLogs, lb.RawLog())
@@ -326,29 +318,22 @@ func (listener *simpleLogListener) getUniqueLogsBlockNumbers() []uint64 {
 
 func (listener *simpleLogListener) requireAllReceived(t *testing.T, expectedState *received) {
 	received := listener.received
+	defer func() { assert.EqualValues(t, expectedState.getUniqueLogs(), received.getUniqueLogs()) }()
 	require.Eventually(t, func() bool {
 		return len(received.getUniqueLogs()) == len(expectedState.getUniqueLogs())
 	}, testutils.WaitTimeout(t), time.Second, "len(received.uniqueLogs): %v is not equal len(expectedState.uniqueLogs): %v", len(received.getUniqueLogs()), len(expectedState.getUniqueLogs()))
-
-	received.Lock()
-	defer received.Unlock()
-	for i, ul := range expectedState.getUniqueLogs() {
-		assert.Equal(t, ul, received.uniqueLogs[i])
-	}
 }
 
-func (listener *simpleLogListener) handleLogBroadcast(lb log.Broadcast) bool {
+func (listener *simpleLogListener) handleLogBroadcast(ctx context.Context, lb log.Broadcast) bool {
 	t := listener.t
-	consumed, err := listener.WasAlreadyConsumed(lb)
+	consumed, err := listener.WasAlreadyConsumed(ctx, lb)
 	if !assert.NoError(t, err) {
 		return false
 	}
 	if !consumed && !listener.skipMarkingConsumed.Load() {
-
-		err = listener.MarkConsumed(lb)
+		err = listener.MarkConsumed(ctx, lb)
 		if assert.NoError(t, err) {
-
-			consumed2, err := listener.WasAlreadyConsumed(lb)
+			consumed2, err := listener.WasAlreadyConsumed(ctx, lb)
 			if assert.NoError(t, err) {
 				assert.True(t, consumed2)
 			}
@@ -357,20 +342,20 @@ func (listener *simpleLogListener) handleLogBroadcast(lb log.Broadcast) bool {
 	return consumed
 }
 
-func (listener *simpleLogListener) WasAlreadyConsumed(broadcast log.Broadcast) (bool, error) {
-	return log.NewORM(listener.db, listener.lggr, listener.cfg, cltest.FixtureChainID).WasBroadcastConsumed(broadcast.RawLog().BlockHash, broadcast.RawLog().Index, listener.jobID)
+func (listener *simpleLogListener) WasAlreadyConsumed(ctx context.Context, broadcast log.Broadcast) (bool, error) {
+	return log.NewORM(listener.db, cltest.FixtureChainID).WasBroadcastConsumed(ctx, broadcast.RawLog().BlockHash, broadcast.RawLog().Index, listener.jobID)
 }
 
-func (listener *simpleLogListener) MarkConsumed(broadcast log.Broadcast) error {
-	return log.NewORM(listener.db, listener.lggr, listener.cfg, cltest.FixtureChainID).MarkBroadcastConsumed(broadcast.RawLog().BlockHash, broadcast.RawLog().BlockNumber, broadcast.RawLog().Index, listener.jobID)
+func (listener *simpleLogListener) MarkConsumed(ctx context.Context, broadcast log.Broadcast) error {
+	return log.NewORM(listener.db, cltest.FixtureChainID).MarkBroadcastConsumed(ctx, broadcast.RawLog().BlockHash, broadcast.RawLog().BlockNumber, broadcast.RawLog().Index, listener.jobID)
 }
 
 type mockListener struct {
 	jobID int32
 }
 
-func (l *mockListener) JobID() int32            { return l.jobID }
-func (l *mockListener) HandleLog(log.Broadcast) {}
+func (l *mockListener) JobID() int32                             { return l.jobID }
+func (l *mockListener) HandleLog(context.Context, log.Broadcast) {}
 
 type mockEthClientExpectedCalls struct {
 	SubscribeFilterLogs int
@@ -380,15 +365,15 @@ type mockEthClientExpectedCalls struct {
 	FilterLogsResult []types.Log
 }
 
-func newMockEthClient(t *testing.T, chchRawLogs chan<- evmtest.RawSub[types.Log], blockHeight int64, expectedCalls mockEthClientExpectedCalls) *evmtest.MockEth {
-	ethClient := evmmocks.NewClient(t)
-	mockEth := &evmtest.MockEth{EthClient: ethClient}
-	mockEth.EthClient.On("ChainID", mock.Anything).Return(&cltest.FixtureChainID)
+func newMockEthClient(t *testing.T, chchRawLogs chan<- testutils.RawSub[types.Log], blockHeight int64, expectedCalls mockEthClientExpectedCalls) *clienttest.MockEth {
+	ethClient := clienttest.NewClient(t)
+	mockEth := &clienttest.MockEth{EthClient: ethClient}
+	mockEth.EthClient.On("ConfiguredChainID", mock.Anything).Return(&cltest.FixtureChainID)
 	mockEth.EthClient.On("SubscribeFilterLogs", mock.Anything, mock.Anything, mock.Anything).
 		Return(
 			func(ctx context.Context, q ethereum.FilterQuery, ch chan<- types.Log) ethereum.Subscription {
 				sub := mockEth.NewSub(t)
-				chchRawLogs <- evmtest.NewRawSub(ch, sub.Err())
+				chchRawLogs <- testutils.NewRawSub(ch, sub.Err())
 				return sub
 			},
 			func(ctx context.Context, q ethereum.FilterQuery, ch chan<- types.Log) error {

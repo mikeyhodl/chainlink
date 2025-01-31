@@ -10,9 +10,8 @@ schema {
 type Query {
     bridge(id: ID!): BridgePayload!
     bridges(offset: Int, limit: Int): BridgesPayload!
-    chain(id: ID!): ChainPayload!
+    chain(id: ID!, network: String): ChainPayload!
     chains(offset: Int, limit: Int): ChainsPayload!
-    config: ConfigPayload!
     configv2: ConfigV2Payload!
     csaKeys: CSAKeysPayload!
     ethKeys: EthKeysPayload!
@@ -34,6 +33,10 @@ type Query {
     ocr2KeyBundles: OCR2KeyBundlesPayload!
     p2pKeys: P2PKeysPayload!
     solanaKeys: SolanaKeysPayload!
+    aptosKeys: AptosKeysPayload!
+    cosmosKeys: CosmosKeysPayload!
+    starknetKeys: StarkNetKeysPayload!
+    tronKeys: TronKeysPayload!
     sqlLogging: GetSQLLoggingPayload!
     vrfKey(id: ID!): VRFKeyPayload!
     vrfKeys: VRFKeysPayload!
@@ -44,22 +47,18 @@ type Mutation {
     cancelJobProposalSpec(id: ID!): CancelJobProposalSpecPayload!
     createAPIToken(input: CreateAPITokenInput!): CreateAPITokenPayload!
     createBridge(input: CreateBridgeInput!): CreateBridgePayload!
-    createChain(input: CreateChainInput!): CreateChainPayload!
     createCSAKey: CreateCSAKeyPayload!
     createFeedsManager(input: CreateFeedsManagerInput!): CreateFeedsManagerPayload!
     createFeedsManagerChainConfig(input: CreateFeedsManagerChainConfigInput!): CreateFeedsManagerChainConfigPayload!
     createJob(input: CreateJobInput!): CreateJobPayload!
-    createNode(input: CreateNodeInput!): CreateNodePayload!
     createOCRKeyBundle: CreateOCRKeyBundlePayload!
     createOCR2KeyBundle(chainType: OCR2ChainType!): CreateOCR2KeyBundlePayload!
     createP2PKey: CreateP2PKeyPayload!
     deleteAPIToken(input: DeleteAPITokenInput!): DeleteAPITokenPayload!
     deleteBridge(id: ID!): DeleteBridgePayload!
-    deleteChain(id: ID!): DeleteChainPayload!
     deleteCSAKey(id: ID!): DeleteCSAKeyPayload!
     deleteFeedsManagerChainConfig(id: ID!): DeleteFeedsManagerChainConfigPayload!
     deleteJob(id: ID!): DeleteJobPayload!
-    deleteNode(id: ID!): DeleteNodePayload!
     deleteOCRKeyBundle(id: ID!): DeleteOCRKeyBundlePayload!
     deleteOCR2KeyBundle(id: ID!): DeleteOCR2KeyBundlePayload!
     deleteP2PKey(id: ID!): DeleteP2PKeyPayload!
@@ -71,8 +70,9 @@ type Mutation {
     setGlobalLogLevel(level: LogLevel!): SetGlobalLogLevelPayload!
     setSQLLogging(input: SetSQLLoggingInput!): SetSQLLoggingPayload!
     updateBridge(id: ID!, input: UpdateBridgeInput!): UpdateBridgePayload!
-    updateChain(id: ID!, input: UpdateChainInput!): UpdateChainPayload!
     updateFeedsManager(id: ID!, input: UpdateFeedsManagerInput!): UpdateFeedsManagerPayload!
+    enableFeedsManager(id: ID!): EnableFeedsManagerPayload!
+    disableFeedsManager(id: ID!): DisableFeedsManagerPayload!
     updateFeedsManagerChainConfig(id: ID!, input: UpdateFeedsManagerChainConfigInput!): UpdateFeedsManagerChainConfigPayload!
     updateJobProposalSpecDefinition(id: ID!, input: UpdateJobProposalSpecDefinitionInput!): UpdateJobProposalSpecDefinitionPayload!
     updateUserPassword(input: UpdatePasswordInput!): UpdatePasswordPayload!

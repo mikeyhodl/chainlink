@@ -25,6 +25,7 @@ var (
 	_ = common.Big1
 	_ = types.BloomLookup
 	_ = event.NewSubscription
+	_ = abi.ConvertType
 )
 
 var VRFConsumerMetaData = &bind.MetaData{
@@ -49,7 +50,7 @@ func DeployVRFConsumer(auth *bind.TransactOpts, backend bind.ContractBackend, vr
 	if err != nil {
 		return common.Address{}, nil, nil, err
 	}
-	return address, tx, &VRFConsumer{VRFConsumerCaller: VRFConsumerCaller{contract: contract}, VRFConsumerTransactor: VRFConsumerTransactor{contract: contract}, VRFConsumerFilterer: VRFConsumerFilterer{contract: contract}}, nil
+	return address, tx, &VRFConsumer{address: address, abi: *parsed, VRFConsumerCaller: VRFConsumerCaller{contract: contract}, VRFConsumerTransactor: VRFConsumerTransactor{contract: contract}, VRFConsumerFilterer: VRFConsumerFilterer{contract: contract}}, nil
 }
 
 type VRFConsumer struct {
@@ -137,11 +138,11 @@ func NewVRFConsumerFilterer(address common.Address, filterer bind.ContractFilter
 }
 
 func bindVRFConsumer(address common.Address, caller bind.ContractCaller, transactor bind.ContractTransactor, filterer bind.ContractFilterer) (*bind.BoundContract, error) {
-	parsed, err := abi.JSON(strings.NewReader(VRFConsumerABI))
+	parsed, err := VRFConsumerMetaData.GetAbi()
 	if err != nil {
 		return nil, err
 	}
-	return bind.NewBoundContract(address, parsed, caller, transactor, filterer), nil
+	return bind.NewBoundContract(address, *parsed, caller, transactor, filterer), nil
 }
 
 func (_VRFConsumer *VRFConsumerRaw) Call(opts *bind.CallOpts, result *[]interface{}, method string, params ...interface{}) error {

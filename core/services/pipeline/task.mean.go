@@ -7,13 +7,12 @@ import (
 	"github.com/shopspring/decimal"
 	"go.uber.org/multierr"
 
-	"github.com/smartcontractkit/chainlink/core/logger"
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 )
 
-//
 // Return types:
-//    *decimal.Decimal
 //
+//	*decimal.Decimal
 type MeanTask struct {
 	BaseTask      `mapstructure:",squash"`
 	Values        string `json:"values"`
@@ -27,7 +26,7 @@ func (t *MeanTask) Type() TaskType {
 	return TaskTypeMean
 }
 
-func (t *MeanTask) Run(ctx context.Context, lggr logger.Logger, vars Vars, inputs []Result) (result Result, runInfo RunInfo) {
+func (t *MeanTask) Run(_ context.Context, _ logger.Logger, vars Vars, inputs []Result) (result Result, runInfo RunInfo) {
 	var (
 		maybeAllowedFaults MaybeUint64Param
 		maybePrecision     MaybeInt32Param

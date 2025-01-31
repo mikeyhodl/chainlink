@@ -6,9 +6,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/smartcontractkit/chainlink/core/chains/evm/log"
-	"github.com/smartcontractkit/chainlink/core/gethwrappers/generated/flux_aggregator_wrapper"
-	"github.com/smartcontractkit/chainlink/core/utils"
+	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/log"
+	"github.com/smartcontractkit/chainlink/v2/core/gethwrappers/generated/flux_aggregator_wrapper"
+	"github.com/smartcontractkit/chainlink/v2/core/utils"
 )
 
 // Format implements fmt.Formatter to always print just the pointer address.
@@ -19,11 +19,15 @@ func (fm *FluxMonitor) Format(f fmt.State, verb rune) {
 }
 
 func (fm *FluxMonitor) ExportedPollIfEligible(threshold, absoluteThreshold float64) {
-	fm.pollIfEligible(PollRequestTypePoll, NewDeviationChecker(threshold, absoluteThreshold, fm.logger), nil)
+	ctx, cancel := fm.eng.NewCtx()
+	defer cancel()
+	fm.pollIfEligible(ctx, PollRequestTypePoll, NewDeviationChecker(threshold, absoluteThreshold, fm.logger), nil)
 }
 
 func (fm *FluxMonitor) ExportedProcessLogs() {
-	fm.processLogs()
+	ctx, cancel := fm.eng.NewCtx()
+	defer cancel()
+	fm.processLogs(ctx)
 }
 
 func (fm *FluxMonitor) ExportedBacklog() *utils.BoundedPriorityQueue[log.Broadcast] {
@@ -36,7 +40,9 @@ func (fm *FluxMonitor) ExportedRoundState(t *testing.T) {
 }
 
 func (fm *FluxMonitor) ExportedRespondToNewRoundLog(log *flux_aggregator_wrapper.FluxAggregatorNewRound, broadcast log.Broadcast) {
-	fm.respondToNewRoundLog(*log, broadcast)
+	ctx, cancel := fm.eng.NewCtx()
+	defer cancel()
+	fm.respondToNewRoundLog(ctx, *log, broadcast)
 }
 
 func (fm *FluxMonitor) ExportedRespondToFlagsRaisedLog() {

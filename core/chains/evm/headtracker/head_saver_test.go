@@ -1,42 +1,96 @@
 package headtracker_test
 
 import (
+	"math/big"
 	"testing"
+	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/stretchr/testify/require"
 
-	"github.com/smartcontractkit/chainlink/core/chains/evm/headtracker"
-	htmocks "github.com/smartcontractkit/chainlink/core/chains/evm/headtracker/mocks"
-	httypes "github.com/smartcontractkit/chainlink/core/chains/evm/headtracker/types"
-	"github.com/smartcontractkit/chainlink/core/internal/cltest"
-	"github.com/smartcontractkit/chainlink/core/internal/testutils"
-	configtest "github.com/smartcontractkit/chainlink/core/internal/testutils/configtest/v2"
-	"github.com/smartcontractkit/chainlink/core/internal/testutils/pgtest"
-	"github.com/smartcontractkit/chainlink/core/logger"
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
+	"github.com/smartcontractkit/chainlink-common/pkg/utils/tests"
+
+	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/headtracker"
+	httypes "github.com/smartcontractkit/chainlink/v2/core/chains/evm/headtracker/types"
+	"github.com/smartcontractkit/chainlink/v2/evm/testutils"
+	evmtypes "github.com/smartcontractkit/chainlink/v2/evm/types"
+	"github.com/smartcontractkit/chainlink/v2/evm/utils"
+	ubig "github.com/smartcontractkit/chainlink/v2/evm/utils/big"
 )
 
-func configureSaver(t *testing.T) (httypes.HeadSaver, headtracker.ORM) {
-	db := pgtest.NewSqlxDB(t)
-	lggr := logger.TestLogger(t)
-	cfg := configtest.NewGeneralConfig(t, nil)
-	htCfg := htmocks.NewConfig(t)
-	htCfg.On("EvmHeadTrackerHistoryDepth").Return(uint32(6))
-	htCfg.On("EvmFinalityDepth").Return(uint32(1))
-	orm := headtracker.NewORM(db, lggr, cfg, cltest.FixtureChainID)
-	saver := headtracker.NewHeadSaver(lggr, orm, htCfg)
+type headTrackerConfig struct {
+	historyDepth uint32
+}
+
+func (h *headTrackerConfig) HistoryDepth() uint32 {
+	return h.historyDepth
+}
+
+func (h *headTrackerConfig) SamplingInterval() time.Duration {
+	return time.Duration(0)
+}
+
+func (h *headTrackerConfig) MaxBufferSize() uint32 {
+	return uint32(0)
+}
+
+func (h *headTrackerConfig) FinalityTagBypass() bool {
+	return false
+}
+func (h *headTrackerConfig) MaxAllowedFinalityDepth() uint32 {
+	return 10000
+}
+func (h *headTrackerConfig) PersistenceEnabled() bool {
+	return true
+}
+
+type config struct {
+	finalityDepth                     uint32
+	blockEmissionIdleWarningThreshold time.Duration
+	finalityTagEnabled                bool
+	finalizedBlockOffset              uint32
+}
+
+func (c *config) FinalityDepth() uint32 { return c.finalityDepth }
+func (c *config) BlockEmissionIdleWarningThreshold() time.Duration {
+	return c.blockEmissionIdleWarningThreshold
+}
+
+func (c *config) FinalityTagEnabled() bool {
+	return c.finalityTagEnabled
+}
+
+func (c *config) FinalizedBlockOffset() uint32 {
+	return c.finalizedBlockOffset
+}
+
+type saverOpts struct {
+	headTrackerConfig *headTrackerConfig
+}
+
+func configureSaver(t *testing.T, opts saverOpts) (httypes.HeadSaver, headtracker.ORM) {
+	if opts.headTrackerConfig == nil {
+		opts.headTrackerConfig = &headTrackerConfig{historyDepth: 6}
+	}
+	db := testutils.NewSqlxDB(t)
+	lggr := logger.Test(t)
+	htCfg := &config{finalityDepth: uint32(1)}
+	orm := headtracker.NewORM(*testutils.FixtureChainID, db)
+	saver := headtracker.NewHeadSaver(lggr, orm, htCfg, opts.headTrackerConfig)
 	return saver, orm
 }
 
 func TestHeadSaver_Save(t *testing.T) {
 	t.Parallel()
 
-	saver, _ := configureSaver(t)
+	saver, _ := configureSaver(t, saverOpts{})
 
-	head := cltest.Head(1)
-	err := saver.Save(testutils.Context(t), head)
+	head := testutils.Head(1)
+	err := saver.Save(tests.Context(t), head)
 	require.NoError(t, err)
 
-	latest, err := saver.LatestHeadFromDB(testutils.Context(t))
+	latest, err := saver.LatestHeadFromDB(tests.Context(t))
 	require.NoError(t, err)
 	require.Equal(t, int64(1), latest.Number)
 
@@ -49,22 +103,58 @@ func TestHeadSaver_Save(t *testing.T) {
 	require.Equal(t, int64(1), latest.Number)
 }
 
-func TestHeadSaver_LoadFromDB(t *testing.T) {
+func TestHeadSaver_Load(t *testing.T) {
 	t.Parallel()
 
-	saver, orm := configureSaver(t)
+	saver, orm := configureSaver(t, saverOpts{
+		headTrackerConfig: &headTrackerConfig{historyDepth: 4},
+	})
 
-	for i := 0; i < 5; i++ {
-		err := orm.IdempotentInsertHead(testutils.Context(t), cltest.Head(i))
+	// create chain
+	// H0 <- H1 <- H2 <- H3 <- H4 <- H5
+	//         \
+	//           H2Uncle
+	//
+	newHead := func(num int, parent common.Hash) *evmtypes.Head {
+		h := evmtypes.NewHead(big.NewInt(int64(num)), utils.NewHash(), parent, ubig.NewI(0))
+		return &h
+	}
+	h0 := newHead(0, utils.NewHash())
+	h1 := newHead(1, h0.Hash)
+	h2 := newHead(2, h1.Hash)
+	h3 := newHead(3, h2.Hash)
+	h4 := newHead(4, h3.Hash)
+	h5 := newHead(5, h4.Hash)
+	h2Uncle := newHead(2, h1.Hash)
+
+	allHeads := []*evmtypes.Head{h0, h1, h2, h2Uncle, h3, h4, h5}
+
+	for _, h := range allHeads {
+		err := orm.IdempotentInsertHead(tests.Context(t), h)
 		require.NoError(t, err)
 	}
 
-	latestHead, err := saver.LoadFromDB(testutils.Context(t))
-	require.NoError(t, err)
-	require.NotNil(t, latestHead)
-	require.Equal(t, int64(4), latestHead.Number)
+	verifyLatestHead := func(latestHead *evmtypes.Head) {
+		// latest head matches h5 and chain does not include h0
+		require.NotNil(t, latestHead)
+		require.Equal(t, int64(5), latestHead.Number)
+		require.Equal(t, uint32(5), latestHead.ChainLength())
+		require.Greater(t, latestHead.EarliestHeadInChain().BlockNumber(), int64(0))
+	}
 
-	latestChain := saver.LatestChain()
-	require.NotNil(t, latestChain)
-	require.Equal(t, int64(4), latestChain.Number)
+	// load all from [h5-historyDepth, h5]
+	latestHead, err := saver.Load(tests.Context(t), h5.BlockNumber())
+	require.NoError(t, err)
+	// verify latest head loaded from db
+	verifyLatestHead(latestHead)
+
+	// verify latest head loaded from memory store
+	latestHead = saver.LatestChain()
+	require.NotNil(t, latestHead)
+	verifyLatestHead(latestHead)
+
+	// h2Uncle was loaded and has chain up to h1
+	uncleChain := saver.Chain(h2Uncle.Hash)
+	require.NotNil(t, uncleChain)
+	require.Equal(t, uint32(2), uncleChain.ChainLength()) // h2Uncle -> h1
 }

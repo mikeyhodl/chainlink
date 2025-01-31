@@ -8,9 +8,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/smartcontractkit/chainlink/core/services/signatures/cryptotest"
-	"github.com/smartcontractkit/chainlink/core/services/signatures/ethschnorr"
-	"github.com/smartcontractkit/chainlink/core/services/signatures/secp256k1"
+	"github.com/smartcontractkit/chainlink/v2/core/services/signatures/cryptotest"
+	"github.com/smartcontractkit/chainlink/v2/core/services/signatures/ethschnorr"
+	"github.com/smartcontractkit/chainlink/v2/core/services/signatures/secp256k1"
 
 	"go.dedis.ch/kyber/v3"
 	dkg "go.dedis.ch/kyber/v3/share/dkg/rabin"
@@ -266,7 +266,6 @@ func _genDistSecret() []*dkg.DistKeyShare {
 		dkss[i] = dks
 	}
 	return dkss
-
 }
 
 func genDistSecret(checkValidPublicKey bool) []*dkg.DistKeyShare {
@@ -284,6 +283,6 @@ func genDistSecret(checkValidPublicKey bool) []*dkg.DistKeyShare {
 
 func randomBytes(n int) []byte {
 	var buff = make([]byte, n)
-	_, _ = rand.Read(buff[:])
+	_, _ = rand.Read(buff)
 	return buff
 }

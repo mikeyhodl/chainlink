@@ -6,18 +6,18 @@ import (
 
 	"github.com/graph-gophers/dataloader"
 
-	"github.com/smartcontractkit/chainlink/core/services/chainlink"
-	"github.com/smartcontractkit/chainlink/core/services/feeds"
+	"github.com/smartcontractkit/chainlink/v2/core/services/chainlink"
+	"github.com/smartcontractkit/chainlink/v2/core/services/feeds"
 )
 
 type feedsManagerChainConfigBatcher struct {
 	app chainlink.Application
 }
 
-func (b *feedsManagerChainConfigBatcher) loadByManagerIDs(_ context.Context, keys dataloader.Keys) []*dataloader.Result {
+func (b *feedsManagerChainConfigBatcher) loadByManagerIDs(ctx context.Context, keys dataloader.Keys) []*dataloader.Result {
 	ids, keyOrder := keyOrderInt64(keys)
 
-	cfgs, err := b.app.GetFeedsService().ListChainConfigsByManagerIDs(ids)
+	cfgs, err := b.app.GetFeedsService().ListChainConfigsByManagerIDs(ctx, ids)
 	if err != nil {
 		return []*dataloader.Result{{Data: nil, Error: err}}
 	}

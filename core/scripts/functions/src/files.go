@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+
+	"github.com/smartcontractkit/chainlink/v2/core/utils"
 )
 
 const (
@@ -11,6 +13,7 @@ const (
 	templatesDir          = "templates"
 	artefactsDir          = "artefacts"
 	ocr2ConfigJson        = "FunctionsOracleConfig.json"
+	ocr2PublicKeysJSON    = "OCR2PublicKeys.json"
 	bootstrapSpecTemplate = "bootstrap.toml"
 	oracleSpecTemplate    = "oracle.toml"
 )
@@ -20,13 +23,17 @@ func writeLines(lines []string, path string) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	wc := utils.NewDeferableWriteCloser(file)
+	defer wc.Close()
 
 	w := bufio.NewWriter(file)
 	for _, line := range lines {
 		fmt.Fprintln(w, line)
 	}
-	return w.Flush()
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	return wc.Close()
 }
 
 func readLines(path string) ([]string, error) {

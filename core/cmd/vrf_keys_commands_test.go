@@ -8,14 +8,14 @@ import (
 
 	"github.com/urfave/cli"
 
-	"github.com/smartcontractkit/chainlink/core/utils"
-	"github.com/smartcontractkit/chainlink/core/web/presenters"
+	"github.com/smartcontractkit/chainlink-common/pkg/utils"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/smartcontractkit/chainlink/core/cmd"
-	"github.com/smartcontractkit/chainlink/core/internal/cltest"
+	"github.com/smartcontractkit/chainlink/v2/core/cmd"
+	"github.com/smartcontractkit/chainlink/v2/core/internal/cltest"
+	"github.com/smartcontractkit/chainlink/v2/core/web/presenters"
 )
 
 func TestVRFKeyPresenter_RenderTable(t *testing.T) {
@@ -66,13 +66,13 @@ func AssertKeysEqualNoTimestamps(t *testing.T, k1, k2 cmd.VRFKeyPresenter) {
 	assert.Equal(t, k1.Uncompressed, k2.Uncompressed)
 }
 
-func TestClientVRF_CRUD(t *testing.T) {
+func TestShellVRF_CRUD(t *testing.T) {
 	t.Parallel()
 
 	// Test application boots with vrf password loaded in memory.
 	// i.e. as if a user had booted with --vrfpassword=<vrfPasswordFilePath>
 	app := startNewApplicationV2(t, nil)
-	client, r := app.NewClientAndRenderer()
+	client, r := app.NewShellAndRenderer()
 
 	require.NoError(t, client.ListVRFKeys(cltest.EmptyCLIContext()))
 	require.Equal(t, 1, len(r.Renders))
@@ -105,7 +105,7 @@ func TestClientVRF_CRUD(t *testing.T) {
 
 	// Now do a hard delete and ensure its completely removes the key
 	set := flag.NewFlagSet("test", 0)
-	cltest.FlagSetApplyFromAction(client.DeleteVRFKey, set, "")
+	flagSetApplyFromAction(client.DeleteVRFKey, set, "")
 
 	require.NoError(t, set.Parse([]string{k2.Compressed}))
 	require.NoError(t, set.Set("hard", "true"))
@@ -129,7 +129,7 @@ func TestVRF_ImportExport(t *testing.T) {
 	// Test application boots with vrf password loaded in memory.
 	// i.e. as if a user had booted with --vrfpassword=<vrfPasswordFilePath>
 	app := startNewApplicationV2(t, nil)
-	client, r := app.NewClientAndRenderer()
+	client, r := app.NewShellAndRenderer()
 	t.Log(client, r)
 
 	// Create a key (encrypted with cltest.VRFPassword)
@@ -141,10 +141,10 @@ func TestVRF_ImportExport(t *testing.T) {
 	// Export it, encrypted with cltest.Password instead
 	keyName := "vrfkey1"
 	set := flag.NewFlagSet("test VRF export", 0)
-	cltest.FlagSetApplyFromAction(client.ExportVRFKey, set, "")
+	flagSetApplyFromAction(client.ExportVRFKey, set, "")
 
 	require.NoError(t, set.Parse([]string{k1.Compressed})) // Arguments
-	require.NoError(t, set.Set("newpassword", "../internal/fixtures/correct_password.txt"))
+	require.NoError(t, set.Set("new-password", "../internal/fixtures/correct_password.txt"))
 	require.NoError(t, set.Set("output", keyName))
 
 	c := cli.NewContext(nil, set, nil)
@@ -157,17 +157,17 @@ func TestVRF_ImportExport(t *testing.T) {
 
 	// Should error if we try to import a duplicate key
 	importSet := flag.NewFlagSet("test VRF import", 0)
-	cltest.FlagSetApplyFromAction(client.ImportVRFKey, importSet, "")
+	flagSetApplyFromAction(client.ImportVRFKey, importSet, "")
 
 	require.NoError(t, importSet.Parse([]string{keyName}))
-	require.NoError(t, importSet.Set("oldpassword", "../internal/fixtures/correct_password.txt"))
+	require.NoError(t, importSet.Set("old-password", "../internal/fixtures/correct_password.txt"))
 
 	importCli := cli.NewContext(nil, importSet, nil)
 	require.Error(t, client.ImportVRFKey(importCli))
 
 	// Lets delete the key and import it
 	set = flag.NewFlagSet("test", 0)
-	cltest.FlagSetApplyFromAction(client.DeleteVRFKey, set, "")
+	flagSetApplyFromAction(client.DeleteVRFKey, set, "")
 
 	require.NoError(t, set.Parse([]string{k1.Compressed}))
 	require.NoError(t, set.Set("hard", "true"))
