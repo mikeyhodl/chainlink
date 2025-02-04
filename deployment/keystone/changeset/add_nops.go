@@ -8,31 +8,25 @@ import (
 	"github.com/smartcontractkit/ccip-owner-contracts/pkg/gethwrappers"
 	"github.com/smartcontractkit/ccip-owner-contracts/pkg/proposal/timelock"
 
-	kcr "github.com/smartcontractkit/chainlink/v2/core/gethwrappers/keystone/generated/capabilities_registry_1_1_0"
-
 	"github.com/smartcontractkit/chainlink/deployment"
 	"github.com/smartcontractkit/chainlink/deployment/common/proposalutils"
 	"github.com/smartcontractkit/chainlink/deployment/keystone/changeset/internal"
+	kcr "github.com/smartcontractkit/chainlink/v2/core/gethwrappers/keystone/generated/capabilities_registry_1_1_0"
 )
 
-// AddCapabilitiesRequest is a request to add capabilities
-type AddCapabilitiesRequest struct {
+type AddNopsRequest = struct {
 	RegistryChainSel uint64
+	Nops             []kcr.CapabilitiesRegistryNodeOperator
 
-	Capabilities []kcr.CapabilitiesRegistryCapability
-	// MCMSConfig is optional. If non-nil, the changes will be proposed using MCMS.
-	MCMSConfig *MCMSConfig
+	MCMSConfig *MCMSConfig // if non-nil, the changes will be proposed using MCMS.
 }
 
-var _ deployment.ChangeSet[*AddCapabilitiesRequest] = AddCapabilities
+var _ deployment.ChangeSet[*AddNopsRequest] = AddNops
 
-// AddCapabilities is a deployment.ChangeSet that adds capabilities to the capabilities registry
-//
-// It is idempotent. It deduplicates the input capabilities.
-//
-// When using MCMS, the output will contain a single proposal with a single batch containing all capabilities to be added.
-// When not using MCMS, each capability will be added in a separate transaction.
-func AddCapabilities(env deployment.Environment, req *AddCapabilitiesRequest) (deployment.ChangesetOutput, error) {
+func AddNops(env deployment.Environment, req *AddNopsRequest) (deployment.ChangesetOutput, error) {
+	for _, nop := range req.Nops {
+		env.Logger.Infow("input NOP", "address", nop.Admin, "name", nop.Name)
+	}
 	registryChain, ok := env.Chains[req.RegistryChainSel]
 	if !ok {
 		return deployment.ChangesetOutput{}, fmt.Errorf("registry chain selector %d does not exist in environment", req.RegistryChainSel)
@@ -48,14 +42,23 @@ func AddCapabilities(env deployment.Environment, req *AddCapabilitiesRequest) (d
 	if !exists {
 		return deployment.ChangesetOutput{}, fmt.Errorf("contract set not found for chain %d", req.RegistryChainSel)
 	}
+
 	useMCMS := req.MCMSConfig != nil
-	ops, err := internal.AddCapabilities(env.Logger, contractSet.CapabilitiesRegistry, env.Chains[req.RegistryChainSel], req.Capabilities, useMCMS)
-	if err != nil {
-		return deployment.ChangesetOutput{}, fmt.Errorf("failed to add capabilities: %w", err)
+	req2 := internal.RegisterNOPSRequest{
+		Env:                   &env,
+		RegistryChainSelector: req.RegistryChainSel,
+		Nops:                  req.Nops,
+		UseMCMS:               useMCMS,
 	}
+	resp, err := internal.RegisterNOPS(env.GetContext(), env.Logger, req2)
+
+	if err != nil {
+		return deployment.ChangesetOutput{}, err
+	}
+	env.Logger.Infow("registered NOPs", "nops", resp.Nops)
 	out := deployment.ChangesetOutput{}
 	if useMCMS {
-		if ops == nil {
+		if resp.Ops == nil {
 			return out, errors.New("expected MCMS operation to be non-nil")
 		}
 		timelocksPerChain := map[uint64]gethcommon.Address{
@@ -68,8 +71,8 @@ func AddCapabilities(env deployment.Environment, req *AddCapabilitiesRequest) (d
 		proposal, err := proposalutils.BuildProposalFromBatches(
 			timelocksPerChain,
 			proposerMCMSes,
-			[]timelock.BatchChainOperation{*ops},
-			"proposal to add capabilities",
+			[]timelock.BatchChainOperation{*resp.Ops},
+			"proposal to add NOPs",
 			req.MCMSConfig.MinDuration,
 		)
 		if err != nil {
@@ -77,5 +80,6 @@ func AddCapabilities(env deployment.Environment, req *AddCapabilitiesRequest) (d
 		}
 		out.Proposals = []timelock.MCMSWithTimelockProposal{*proposal}
 	}
+
 	return out, nil
 }
