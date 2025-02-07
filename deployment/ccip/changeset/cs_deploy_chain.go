@@ -569,8 +569,6 @@ func initializeRouter(e deployment.Environment, chain deployment.SolChain, ccipR
 
 	instruction, err := solRouter.NewInitializeInstruction(
 		chain.Selector,                         // chain selector
-		deployment.SolDefaultGasLimit,          // default gas limit
-		true,                                   // allow out of order execution
 		EnableExecutionAfter,                   // period to wait before allowing manual execution
 		solana.PublicKey{},                     // fee aggregator (TODO: changeset to set the fee aggregator)
 		linkTokenAddress,                       // link token mint

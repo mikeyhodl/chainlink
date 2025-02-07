@@ -437,7 +437,7 @@ require (
 	github.com/shoenig/go-m1cpu v0.1.6 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/smartcontractkit/ccip-owner-contracts v0.0.0-salt-fix // indirect
-	github.com/smartcontractkit/chainlink-ccip/chains/solana v0.0.0-20250128193522-bdbfcc588847 // indirect
+	github.com/smartcontractkit/chainlink-ccip/chains/solana v0.0.0-20250130162116-1b2ee24da54b // indirect
 	github.com/smartcontractkit/chainlink-cosmos v0.5.2-0.20250130125138-3df261e09ddc // indirect
 	github.com/smartcontractkit/chainlink-data-streams v0.1.1-0.20250128203428-08031923fbe5 // indirect
 	github.com/smartcontractkit/chainlink-feeds v0.1.1 // indirect
