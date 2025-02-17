@@ -5,9 +5,9 @@ import (
 
 	"github.com/graph-gophers/graphql-go"
 
-	"github.com/smartcontractkit/chainlink/core/services/chainlink"
-	"github.com/smartcontractkit/chainlink/core/services/job"
-	"github.com/smartcontractkit/chainlink/core/web/loader"
+	"github.com/smartcontractkit/chainlink/v2/core/services/chainlink"
+	"github.com/smartcontractkit/chainlink/v2/core/services/job"
+	"github.com/smartcontractkit/chainlink/v2/core/web/loader"
 )
 
 // JobResolver resolves the Job type.
@@ -113,7 +113,7 @@ func (r *JobResolver) Runs(ctx context.Context, args struct {
 		limit = 100
 	}
 
-	ids, err := r.app.JobORM().FindPipelineRunIDsByJobID(r.j.ID, offset, limit)
+	ids, err := r.app.JobORM().FindPipelineRunIDsByJobID(ctx, r.j.ID, offset, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -123,7 +123,7 @@ func (r *JobResolver) Runs(ctx context.Context, args struct {
 		return nil, err
 	}
 
-	count, err := r.app.JobORM().CountPipelineRunsByJobID(r.j.ID)
+	count, err := r.app.JobORM().CountPipelineRunsByJobID(ctx, r.j.ID)
 	if err != nil {
 		return nil, err
 	}

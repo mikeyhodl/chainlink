@@ -4,14 +4,14 @@ import (
 	"context"
 	"log"
 
-	"github.com/smartcontractkit/chainlink/core/logger"
+	"github.com/smartcontractkit/chainlink/v2/core/logger"
 )
 
 func (k *Keeper) CreateJob(ctx context.Context) {
-	k.createJobs()
+	k.createJobs(ctx)
 }
 
-func (k *Keeper) createJobs() {
+func (k *Keeper) createJobs(ctx context.Context) {
 	lggr, closeLggr := logger.NewLogger()
 	logger.Sugared(lggr).ErrorIfFn(closeLggr, "Failed to close logger")
 
@@ -27,12 +27,12 @@ func (k *Keeper) createJobs() {
 			pwd = defaultChainlinkNodePassword
 		}
 
-		cl, err := authenticate(url, email, pwd, lggr)
+		cl, err := authenticate(ctx, url, email, pwd, lggr)
 		if err != nil {
 			log.Fatal(err)
 		}
 
-		if err = k.createKeeperJob(cl, k.cfg.RegistryAddress, keeperAddr); err != nil {
+		if err = k.createKeeperJob(ctx, cl, k.cfg.RegistryAddress, keeperAddr); err != nil {
 			log.Fatal(err)
 		}
 	}

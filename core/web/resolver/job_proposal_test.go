@@ -1,13 +1,16 @@
 package resolver
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"testing"
 
-	uuid "github.com/satori/go.uuid"
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/mock"
+	"gopkg.in/guregu/null.v4"
 
-	"github.com/smartcontractkit/chainlink/core/services/feeds"
+	"github.com/smartcontractkit/chainlink/v2/core/services/feeds"
 )
 
 func TestResolver_GetJobProposal(t *testing.T) {
@@ -18,6 +21,7 @@ func TestResolver_GetJobProposal(t *testing.T) {
 			jobProposal(id: "1") {
 				... on JobProposal {
 					id
+					name
 					status
 					externalJobID
 					remoteUUID
@@ -36,12 +40,14 @@ func TestResolver_GetJobProposal(t *testing.T) {
 		}`
 
 	jpID := int64(1)
-	ejID := uuid.NullUUID{UUID: uuid.NewV4(), Valid: true}
-	rUUID := uuid.NewV4()
+	ejID := uuid.NullUUID{UUID: uuid.New(), Valid: true}
+	rUUID := uuid.New()
+	name := "job_proposal_1"
 	result := `
 		{
 			"jobProposal": {
 				"id": "1",
+				"name": "%s",
 				"status": "APPROVED",
 				"externalJobID": "%s",
 				"remoteUUID": "%s",
@@ -59,15 +65,16 @@ func TestResolver_GetJobProposal(t *testing.T) {
 		{
 			name:          "success",
 			authenticated: true,
-			before: func(f *gqlTestFramework) {
-				f.Mocks.feedsSvc.On("ListManagersByIDs", []int64{1}).Return([]feeds.FeedsManager{
+			before: func(ctx context.Context, f *gqlTestFramework) {
+				f.Mocks.feedsSvc.On("ListManagersByIDs", mock.Anything, []int64{1}).Return([]feeds.FeedsManager{
 					{
 						ID:   1,
 						Name: "manager",
 					},
 				}, nil)
-				f.Mocks.feedsSvc.On("GetJobProposal", jpID).Return(&feeds.JobProposal{
+				f.Mocks.feedsSvc.On("GetJobProposal", mock.Anything, jpID).Return(&feeds.JobProposal{
 					ID:             jpID,
+					Name:           null.StringFrom(name),
 					Status:         feeds.JobProposalStatusApproved,
 					ExternalJobID:  ejID,
 					RemoteUUID:     rUUID,
@@ -78,13 +85,13 @@ func TestResolver_GetJobProposal(t *testing.T) {
 				f.App.On("GetFeedsService").Return(f.Mocks.feedsSvc)
 			},
 			query:  query,
-			result: fmt.Sprintf(result, ejID.UUID.String(), rUUID.String()),
+			result: fmt.Sprintf(result, name, ejID.UUID.String(), rUUID.String()),
 		},
 		{
 			name:          "not found error",
 			authenticated: true,
-			before: func(f *gqlTestFramework) {
-				f.Mocks.feedsSvc.On("GetJobProposal", jpID).Return(nil, sql.ErrNoRows)
+			before: func(ctx context.Context, f *gqlTestFramework) {
+				f.Mocks.feedsSvc.On("GetJobProposal", mock.Anything, jpID).Return(nil, sql.ErrNoRows)
 				f.App.On("GetFeedsService").Return(f.Mocks.feedsSvc)
 			},
 			query: query,

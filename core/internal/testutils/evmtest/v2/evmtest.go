@@ -3,21 +3,18 @@ package v2
 import (
 	"testing"
 
-	"github.com/smartcontractkit/chainlink/core/chains/evm/config"
-	v2 "github.com/smartcontractkit/chainlink/core/chains/evm/config/v2"
-	configtest "github.com/smartcontractkit/chainlink/core/internal/testutils/configtest/v2"
-	"github.com/smartcontractkit/chainlink/core/logger"
-	"github.com/smartcontractkit/chainlink/core/utils"
+	"github.com/smartcontractkit/chainlink-integrations/evm/config"
+	"github.com/smartcontractkit/chainlink-integrations/evm/config/toml"
+	"github.com/smartcontractkit/chainlink-integrations/evm/utils/big"
 )
 
 func ChainEthMainnet(t *testing.T) config.ChainScopedConfig      { return scopedConfig(t, 1) }
 func ChainOptimismMainnet(t *testing.T) config.ChainScopedConfig { return scopedConfig(t, 10) }
-func ChainOptimismKovan(t *testing.T) config.ChainScopedConfig   { return scopedConfig(t, 69) }
 func ChainArbitrumMainnet(t *testing.T) config.ChainScopedConfig { return scopedConfig(t, 42161) }
 func ChainArbitrumRinkeby(t *testing.T) config.ChainScopedConfig { return scopedConfig(t, 421611) }
 
 func scopedConfig(t *testing.T, chainID int64) config.ChainScopedConfig {
-	id := utils.NewBigI(chainID)
-	evmCfg := v2.EVMConfig{ChainID: id, Chain: v2.Defaults(id)}
-	return v2.NewTOMLChainScopedConfig(configtest.NewTestGeneralConfig(t), &evmCfg, logger.TestLogger(t))
+	id := big.NewI(chainID)
+	evmCfg := toml.EVMConfig{ChainID: id, Chain: toml.Defaults(id)}
+	return config.NewTOMLChainScopedConfig(&evmCfg)
 }

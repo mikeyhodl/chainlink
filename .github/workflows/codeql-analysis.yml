@@ -4,9 +4,6 @@ on:
   push:
     branches:
       - develop
-      - staging
-      - trying
-      - rollup
   pull_request:
     # The branches below must be a subset of the branches above
     branches: [develop]
@@ -14,43 +11,71 @@ on:
     - cron: '23 19 * * 4'
 
 jobs:
-  analyze:
-    name: Analyze ${{ matrix.language }}
-    runs-on: ubuntu20.04-4cores-16GB
+  filter:
+    name: Detect Changes
+    permissions:
+      pull-requests: read
+    outputs:
+      should-run-go: ${{ steps.changes.outputs.go-changes == 'true' || steps.changes.outputs.workflow-changes == 'true' || github.event == 'schedule' }}
+      should-run-js: ${{ steps.changes.outputs.js-changes == 'true' || steps.changes.outputs.workflow-changes == 'true' || github.event == 'schedule' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the repo
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          repository: smartcontractkit/chainlink
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        id: changes
+        with:
+          filters: |
+            go-changes:
+              - '**/*.go'
+              - '**/go.mod'
+              - '**/go.sum'
+            js-changes:
+              - '**/package.json'
+              - '**/pnpm-lock.yaml'
+              - '**/*.js'
+              - '**/*.ts'
+            workflow-changes:
+              - '.github/workflows/codeql-analysis.yml'
 
+  analyze:
+    needs: filter
+    name: Analyze ${{ matrix.type.language }}
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        language: ['go', 'javascript']
-
+        type:
+          - language: 'go'
+            should-run: ${{ needs.filter.outputs.should-run-go }}
+          - language: 'javascript'
+            should-run: ${{ needs.filter.outputs.should-run-js }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@93ea575cb5d8a053eaa0ac8fa3b40d7e05a33cc8 # v3.1.0
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Go
-        if: ${{ matrix.language == 'go' }}
-        uses: actions/setup-go@v3
+        if: ${{ matrix.type.language == 'go' && matrix.type.should-run == 'true' }}
+        uses: ./.github/actions/setup-go
         with:
           go-version-file: 'go.mod'
+          only-modules: 'true'
 
       - name: Touching core/web/assets/index.html
-        if: ${{ matrix.language == 'go' }}
+        if: ${{ matrix.type.language == 'go' && matrix.type.should-run == 'true' }}
         run: mkdir -p core/web/assets && touch core/web/assets/index.html
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@515828d97454b8354517688ddc5b48402b723750 # v2.1.38
+        if: ${{ matrix.type.should-run == 'true' }}
+        uses: github/codeql-action/init@65c74964a9ed8c44ed9f19d4bbc5757a6a8e9ab9 # codeql-bundle-v2.16.1
         with:
-          languages: ${{ matrix.language }}
+          languages: ${{ matrix.type.language }}
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@515828d97454b8354517688ddc5b48402b723750 # v2.1.38
-
-      - name: Collect Metrics
-        if: always()
-        id: collect-gha-metrics
-        uses: smartcontractkit/push-gha-metrics-action@808c183d1f5c26a4f3fd50b75d3cf7b58d9aa293
-        with:
-          basic-auth: ${{ secrets.GRAFANA_CLOUD_BASIC_AUTH }}
-          hostname: ${{ secrets.GRAFANA_CLOUD_HOST }}
-          this-job-name: Analyze ${{ matrix.language }}
-        continue-on-error: true
+        if: ${{ matrix.type.should-run == 'true' }}
+        uses: github/codeql-action/analyze@65c74964a9ed8c44ed9f19d4bbc5757a6a8e9ab9 # codeql-bundle-v2.16.1

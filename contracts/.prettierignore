@@ -15,16 +15,15 @@ abi
 artifacts
 foundry-artifacts
 foundry-cache
-foundry-lib
 cache
 node_modules
 solc
 LinkToken.json
 typechain
-src/v0.4
-src/v0.5
-src/v0.6
 **/vendor
+src/v0.8/ccip/**
+src/v0.8/workflow/**
+src/v0.8/data-feeds/**
 
 # Ignore TS definition and map files
 **/**.d.ts
@@ -37,3 +36,6 @@ venv/
 .github/**/*.yml
 .golangci.yml
 .solhint.json
+
+src/v0.8/mocks/FunctionsOracleEventsMock.sol
+src/v0.8/mocks/FunctionsBillingRegistryEventsMock.sol

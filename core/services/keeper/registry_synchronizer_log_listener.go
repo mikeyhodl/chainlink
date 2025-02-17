@@ -1,16 +1,17 @@
 package keeper
 
 import (
+	"context"
 	"reflect"
 
-	"github.com/smartcontractkit/chainlink/core/chains/evm/log"
+	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/log"
 )
 
 func (rs *RegistrySynchronizer) JobID() int32 {
 	return rs.job.ID
 }
 
-func (rs *RegistrySynchronizer) HandleLog(broadcast log.Broadcast) {
+func (rs *RegistrySynchronizer) HandleLog(ctx context.Context, broadcast log.Broadcast) {
 	eventLog := broadcast.DecodedLog()
 	if eventLog == nil || reflect.ValueOf(eventLog).IsNil() {
 		rs.logger.Panicf("HandleLog: ignoring nil value, type: %T", broadcast)

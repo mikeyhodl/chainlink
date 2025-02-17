@@ -9,10 +9,12 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
-	evmclient "github.com/smartcontractkit/chainlink/core/chains/evm/client"
-	evmtypes "github.com/smartcontractkit/chainlink/core/chains/evm/types"
-	"github.com/smartcontractkit/chainlink/core/logger"
-	"github.com/smartcontractkit/chainlink/core/utils"
+
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
+
+	evmclient "github.com/smartcontractkit/chainlink-integrations/evm/client"
+	evmtypes "github.com/smartcontractkit/chainlink-integrations/evm/types"
+	"github.com/smartcontractkit/chainlink/v2/core/utils"
 )
 
 // ArbitrumBlockTranslator uses Arbitrum's special L1BlockNumber to optimise log lookups
@@ -32,7 +34,7 @@ type ArbitrumBlockTranslator struct {
 func NewArbitrumBlockTranslator(ethClient evmclient.Client, lggr logger.Logger) *ArbitrumBlockTranslator {
 	return &ArbitrumBlockTranslator{
 		ethClient,
-		lggr.Named("ArbitrumBlockTranslator"),
+		logger.Named(lggr, "ArbitrumBlockTranslator"),
 		make(map[int64]int64),
 		sync.RWMutex{},
 		utils.KeyedMutex{},

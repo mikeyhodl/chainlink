@@ -3,8 +3,8 @@ package web
 import (
 	"github.com/gin-gonic/gin"
 
-	"github.com/smartcontractkit/chainlink/core/services/chainlink"
-	"github.com/smartcontractkit/chainlink/core/web/presenters"
+	"github.com/smartcontractkit/chainlink/v2/core/services/chainlink"
+	"github.com/smartcontractkit/chainlink/v2/core/web/presenters"
 )
 
 // FeaturesController manages the feature flags
@@ -13,8 +13,9 @@ type FeaturesController struct {
 }
 
 const (
-	FeatureKeyCSA          string = "csa"
-	FeatureKeyFeedsManager string = "feeds_manager"
+	FeatureKeyCSA                string = "csa"
+	FeatureKeyFeedsManager       string = "feeds_manager"
+	FeatureKeyMultiFeedsManagers string = "multi_feeds_managers"
 )
 
 // Index retrieves the features
@@ -22,8 +23,9 @@ const (
 // "GET <application>/features"
 func (fc *FeaturesController) Index(c *gin.Context) {
 	resources := []presenters.FeatureResource{
-		*presenters.NewFeatureResource(FeatureKeyCSA, fc.App.GetConfig().FeatureUICSAKeys()),
-		*presenters.NewFeatureResource(FeatureKeyFeedsManager, fc.App.GetConfig().FeatureFeedsManager()),
+		*presenters.NewFeatureResource(FeatureKeyCSA, fc.App.GetConfig().Feature().UICSAKeys()),
+		*presenters.NewFeatureResource(FeatureKeyFeedsManager, fc.App.GetConfig().Feature().FeedsManager()),
+		*presenters.NewFeatureResource(FeatureKeyMultiFeedsManagers, fc.App.GetConfig().Feature().MultiFeedsManagers()),
 	}
 
 	jsonAPIResponse(c, resources, "features")

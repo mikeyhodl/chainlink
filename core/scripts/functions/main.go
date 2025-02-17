@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	src "github.com/smartcontractkit/chainlink/core/scripts/functions/src"
+	"github.com/smartcontractkit/chainlink/core/scripts/functions/src"
 )
 
 type command interface {
@@ -19,6 +19,7 @@ func main() {
 		src.NewGenerateJobSpecsCommand(),
 		src.NewDeployJobSpecsCommand(),
 		src.NewDeleteJobsCommand(),
+		src.NewFetchKeysCommand(),
 	}
 
 	commandsList := func(commands []command) string {

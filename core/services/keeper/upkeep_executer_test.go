@@ -2,67 +2,70 @@ package keeper_test
 
 import (
 	"math/big"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/onsi/gomega"
-	"github.com/smartcontractkit/sqlx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/atomic"
 
-	"github.com/smartcontractkit/chainlink/core/assets"
-	"github.com/smartcontractkit/chainlink/core/chains/evm"
-	"github.com/smartcontractkit/chainlink/core/chains/evm/gas"
-	gasmocks "github.com/smartcontractkit/chainlink/core/chains/evm/gas/mocks"
-	evmmocks "github.com/smartcontractkit/chainlink/core/chains/evm/mocks"
-	"github.com/smartcontractkit/chainlink/core/chains/evm/txmgr"
-	txmmocks "github.com/smartcontractkit/chainlink/core/chains/evm/txmgr/mocks"
-	evmtypes "github.com/smartcontractkit/chainlink/core/chains/evm/types"
-	"github.com/smartcontractkit/chainlink/core/config"
-	"github.com/smartcontractkit/chainlink/core/internal/cltest"
-	"github.com/smartcontractkit/chainlink/core/internal/testutils"
-	configtest "github.com/smartcontractkit/chainlink/core/internal/testutils/configtest/v2"
-	"github.com/smartcontractkit/chainlink/core/internal/testutils/evmtest"
-	"github.com/smartcontractkit/chainlink/core/internal/testutils/pgtest"
-	"github.com/smartcontractkit/chainlink/core/logger"
-	"github.com/smartcontractkit/chainlink/core/services/chainlink"
-	"github.com/smartcontractkit/chainlink/core/services/job"
-	"github.com/smartcontractkit/chainlink/core/services/keeper"
-	"github.com/smartcontractkit/chainlink/core/services/keystore"
-	"github.com/smartcontractkit/chainlink/core/utils"
+	"github.com/jmoiron/sqlx"
+
+	"github.com/smartcontractkit/chainlink-common/pkg/services/servicetest"
+
+	"github.com/smartcontractkit/chainlink-integrations/evm/assets"
+	"github.com/smartcontractkit/chainlink-integrations/evm/client/clienttest"
+	"github.com/smartcontractkit/chainlink-integrations/evm/gas"
+	gasmocks "github.com/smartcontractkit/chainlink-integrations/evm/gas/mocks"
+	evmtypes "github.com/smartcontractkit/chainlink-integrations/evm/types"
+	"github.com/smartcontractkit/chainlink-integrations/evm/utils"
+	ubig "github.com/smartcontractkit/chainlink-integrations/evm/utils/big"
+	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/txmgr"
+	txmmocks "github.com/smartcontractkit/chainlink/v2/core/chains/evm/txmgr/mocks"
+	"github.com/smartcontractkit/chainlink/v2/core/chains/legacyevm"
+	"github.com/smartcontractkit/chainlink/v2/core/internal/cltest"
+	"github.com/smartcontractkit/chainlink/v2/core/internal/testutils"
+	"github.com/smartcontractkit/chainlink/v2/core/internal/testutils/configtest"
+	"github.com/smartcontractkit/chainlink/v2/core/internal/testutils/evmtest"
+	"github.com/smartcontractkit/chainlink/v2/core/internal/testutils/pgtest"
+	"github.com/smartcontractkit/chainlink/v2/core/logger"
+	"github.com/smartcontractkit/chainlink/v2/core/services/chainlink"
+	"github.com/smartcontractkit/chainlink/v2/core/services/job"
+	"github.com/smartcontractkit/chainlink/v2/core/services/keeper"
+	"github.com/smartcontractkit/chainlink/v2/core/services/keystore"
 )
 
 func newHead() evmtypes.Head {
-	return evmtypes.NewHead(big.NewInt(20), utils.NewHash(), utils.NewHash(), 1000, utils.NewBigI(0))
+	return evmtypes.NewHead(big.NewInt(20), utils.NewHash(), utils.NewHash(), ubig.NewI(0))
 }
 
-func mockEstimator(t *testing.T) (estimator *gasmocks.Estimator) {
-	estimator = gasmocks.NewEstimator(t)
-	estimator.On("GetLegacyGas", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Return(assets.GWei(60), uint32(0), nil)
-	estimator.On("GetDynamicFee", mock.Anything, mock.Anything, mock.Anything).Maybe().Return(gas.DynamicFee{
-		FeeCap: assets.GWei(60),
-		TipCap: assets.GWei(60),
+func mockEstimator(t *testing.T) gas.EvmFeeEstimator {
+	// note: estimator will only return 1 of legacy or dynamic fees (not both)
+	// assumed to call legacy estimator only
+	estimator := gasmocks.NewEvmFeeEstimator(t)
+	estimator.On("GetFee", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Return(gas.EvmFee{
+		GasPrice: assets.GWei(60),
 	}, uint32(60), nil)
-	return
+	return estimator
 }
 
-func setup(t *testing.T, estimator *gasmocks.Estimator, overrideFn func(c *chainlink.Config, s *chainlink.Secrets)) (
+func setup(t *testing.T, estimator gas.EvmFeeEstimator, overrideFn func(c *chainlink.Config, s *chainlink.Secrets)) (
 	*sqlx.DB,
-	config.GeneralConfig,
-	*evmmocks.Client,
+	chainlink.GeneralConfig,
+	*clienttest.Client,
 	*keeper.UpkeepExecuter,
 	keeper.Registry,
 	keeper.UpkeepRegistration,
 	job.Job,
 	cltest.JobPipelineV2TestHelper,
-	*txmmocks.TxManager,
+	*txmmocks.MockEvmTxManager,
 	keystore.Master,
-	evm.Chain,
-	keeper.ORM,
+	legacyevm.Chain,
+	*keeper.ORM,
 ) {
 	cfg := configtest.NewGeneralConfig(t, func(c *chainlink.Config, s *chainlink.Secrets) {
 		c.Keeper.TurnLookBack = ptr[int64](0)
@@ -71,23 +74,33 @@ func setup(t *testing.T, estimator *gasmocks.Estimator, overrideFn func(c *chain
 		}
 	})
 	db := pgtest.NewSqlxDB(t)
-	keyStore := cltest.NewKeyStore(t, db, cfg)
-	ethClient := evmtest.NewEthClientMockWithDefaultChain(t)
+	keyStore := cltest.NewKeyStore(t, db)
+	ethClient := evmtest.NewEthClientMock(t)
+	ethClient.On("ConfiguredChainID").Return(cfg.EVMConfigs()[0].ChainID.ToInt()).Maybe()
+	ethClient.On("IsL2").Return(false).Maybe()
 	ethClient.On("HeadByNumber", mock.Anything, mock.Anything).Maybe().Return(&evmtypes.Head{Number: 1, Hash: utils.NewHash()}, nil)
-	txm := txmmocks.NewTxManager(t)
-	txm.On("GetGasEstimator").Return(estimator)
-	cc := evmtest.NewChainSet(t, evmtest.TestChainOpts{TxManager: txm, DB: db, Client: ethClient, KeyStore: keyStore.Eth(), GeneralConfig: cfg})
-	jpv2 := cltest.NewJobPipelineV2(t, cfg, cc, db, keyStore, nil, nil)
-	ch := evmtest.MustGetDefaultChain(t, cc)
-	orm := keeper.NewORM(db, logger.TestLogger(t), ch.Config(), txmgr.SendEveryStrategy{})
-	registry, job := cltest.MustInsertKeeperRegistry(t, db, orm, keyStore.Eth(), 0, 1, 20)
+	txm := txmmocks.NewMockEvmTxManager(t)
+	legacyChains := evmtest.NewLegacyChains(t, evmtest.TestChainOpts{
+		TxManager:      txm,
+		DB:             db,
+		Client:         ethClient,
+		KeyStore:       keyStore.Eth(),
+		ChainConfigs:   cfg.EVMConfigs(),
+		DatabaseConfig: cfg.Database(),
+		FeatureConfig:  cfg.Feature(),
+		ListenerConfig: cfg.Database().Listener(),
+		GasEstimator:   estimator,
+	})
+	jpv2 := cltest.NewJobPipelineV2(t, cfg.WebServer(), cfg.JobPipeline(), legacyChains, db, keyStore, nil, nil)
+	ch := evmtest.MustGetDefaultChain(t, legacyChains)
+	orm := keeper.NewORM(db, logger.TestLogger(t))
+	registry, jb := cltest.MustInsertKeeperRegistry(t, db, orm, keyStore.Eth(), 0, 1, 20)
+
 	lggr := logger.TestLogger(t)
-	executer := keeper.NewUpkeepExecuter(job, orm, jpv2.Pr, ethClient, ch.HeadBroadcaster(), ch.TxManager().GetGasEstimator(), lggr, ch.Config(), job.KeeperSpec.FromAddress.Address())
-	upkeep := cltest.MustInsertUpkeepForRegistry(t, db, ch.Config(), registry)
-	err := executer.Start(testutils.Context(t))
-	t.Cleanup(func() { executer.Close() })
-	require.NoError(t, err)
-	return db, cfg, ethClient, executer, registry, upkeep, job, jpv2, txm, keyStore, ch, orm
+	executer := keeper.NewUpkeepExecuter(jb, orm, jpv2.Pr, ethClient, ch.HeadBroadcaster(), ch.GasEstimator(), lggr, cfg.Keeper(), jb.KeeperSpec.FromAddress.Address())
+	upkeep := cltest.MustInsertUpkeepForRegistry(t, db, registry)
+	servicetest.Run(t, executer)
+	return db, cfg, ethClient, executer, registry, upkeep, jb, jpv2, txm, keyStore, ch, orm
 }
 
 var checkUpkeepResponse = struct {
@@ -123,16 +136,20 @@ func Test_UpkeepExecuter_PerformsUpkeep_Happy(t *testing.T) {
 	t.Parallel()
 
 	t.Run("runs upkeep on triggering block number", func(t *testing.T) {
-		db, config, ethMock, executer, registry, upkeep, job, jpv2, txm, _, _, _ := setup(t, mockEstimator(t), nil)
+		db, config, ethMock, executer, registry, upkeep, job, jpv2, txm, _, _, _ := setup(t, mockEstimator(t),
+			func(c *chainlink.Config, s *chainlink.Secrets) {
+				c.EVM[0].ChainID = (*ubig.Big)(testutils.SimulatedChainID)
+			})
 
-		gasLimit := upkeep.ExecuteGas + config.KeeperRegistryPerformGasOverhead()
+		gasLimit := uint64(5_000_000 + config.Keeper().Registry().PerformGasOverhead())
 
 		ethTxCreated := cltest.NewAwaiter()
-		txm.On("CreateEthTransaction",
-			mock.MatchedBy(func(newTx txmgr.NewTx) bool { return newTx.GasLimit == gasLimit }),
+		txm.On("CreateTransaction",
+			mock.Anything,
+			mock.MatchedBy(func(txRequest txmgr.TxRequest) bool { return txRequest.FeeLimit == gasLimit }),
 		).
 			Once().
-			Return(txmgr.EthTx{
+			Return(txmgr.Tx{
 				ID: 1,
 			}, nil).
 			Run(func(mock.Arguments) { ethTxCreated.ItHappened() })
@@ -166,16 +183,18 @@ func Test_UpkeepExecuter_PerformsUpkeep_Happy(t *testing.T) {
 		runTest := func(t *testing.T, eip1559 bool) {
 			db, config, ethMock, executer, registry, upkeep, job, jpv2, txm, _, _, _ := setup(t, mockEstimator(t), func(c *chainlink.Config, s *chainlink.Secrets) {
 				c.EVM[0].GasEstimator.EIP1559DynamicFees = &eip1559
+				c.EVM[0].ChainID = (*ubig.Big)(testutils.SimulatedChainID)
 			})
 
-			gasLimit := upkeep.ExecuteGas + config.KeeperRegistryPerformGasOverhead()
+			gasLimit := uint64(5_000_000 + config.Keeper().Registry().PerformGasOverhead())
 
 			ethTxCreated := cltest.NewAwaiter()
-			txm.On("CreateEthTransaction",
-				mock.MatchedBy(func(newTx txmgr.NewTx) bool { return newTx.GasLimit == gasLimit }),
+			txm.On("CreateTransaction",
+				mock.Anything,
+				mock.MatchedBy(func(txRequest txmgr.TxRequest) bool { return txRequest.FeeLimit == gasLimit }),
 			).
 				Once().
-				Return(txmgr.EthTx{
+				Return(txmgr.Tx{
 					ID: 1,
 				}, nil).
 				Run(func(mock.Arguments) { ethTxCreated.ItHappened() })
@@ -216,12 +235,15 @@ func Test_UpkeepExecuter_PerformsUpkeep_Happy(t *testing.T) {
 	})
 
 	t.Run("errors if submission key not found", func(t *testing.T) {
-		_, _, ethMock, executer, registry, _, job, jpv2, _, keyStore, _, _ := setup(t, mockEstimator(t), nil)
+		ctx := testutils.Context(t)
+		_, _, ethMock, executer, registry, _, job, jpv2, _, keyStore, _, _ := setup(t, mockEstimator(t), func(c *chainlink.Config, s *chainlink.Secrets) {
+			c.EVM[0].ChainID = (*ubig.Big)(testutils.SimulatedChainID)
+		})
 
 		// replace expected key with random one
-		_, err := keyStore.Eth().Create(&cltest.FixtureChainID)
+		_, err := keyStore.Eth().Create(ctx, testutils.SimulatedChainID)
 		require.NoError(t, err)
-		_, err = keyStore.Eth().Delete(job.KeeperSpec.FromAddress.Hex())
+		_, err = keyStore.Eth().Delete(ctx, job.KeeperSpec.FromAddress.Hex())
 		require.NoError(t, err)
 
 		registryMock := cltest.NewContractMockReceiver(t, ethMock, keeper.Registry1_1ABI, registry.ContractAddress.Address())
@@ -248,36 +270,39 @@ func Test_UpkeepExecuter_PerformsUpkeep_Happy(t *testing.T) {
 	})
 
 	t.Run("errors if submission chain not found", func(t *testing.T) {
-		db, _, ethMock, _, _, _, _, jpv2, _, keyStore, ch, orm := setup(t, mockEstimator(t), nil)
+		db, cfg, ethMock, _, _, _, _, jpv2, _, keyStore, ch, orm := setup(t, mockEstimator(t), nil)
 
 		registry, jb := cltest.MustInsertKeeperRegistry(t, db, orm, keyStore.Eth(), 0, 1, 20)
 		// change chain ID to non-configured chain
-		jb.KeeperSpec.EVMChainID = (*utils.Big)(big.NewInt(999))
-		cltest.MustInsertUpkeepForRegistry(t, db, ch.Config(), registry)
+		jb.KeeperSpec.EVMChainID = (*ubig.Big)(big.NewInt(999))
+		cltest.MustInsertUpkeepForRegistry(t, db, registry)
 		lggr := logger.TestLogger(t)
-		executer := keeper.NewUpkeepExecuter(jb, orm, jpv2.Pr, ethMock, ch.HeadBroadcaster(), ch.TxManager().GetGasEstimator(), lggr, ch.Config(), jb.KeeperSpec.FromAddress.Address())
+		executer := keeper.NewUpkeepExecuter(jb, orm, jpv2.Pr, ethMock, ch.HeadBroadcaster(), ch.GasEstimator(), lggr, cfg.Keeper(), jb.KeeperSpec.FromAddress.Address())
 		err := executer.Start(testutils.Context(t))
 		require.NoError(t, err)
 		head := newHead()
 		executer.OnNewLongestChain(testutils.Context(t), &head)
 		// TODO we want to see an errored run result once this is completed
-		// https://app.shortcut.com/chainlinklabs/story/25397/remove-failearly-flag-from-eth-call-task
+		// https://smartcontract-it.atlassian.net/browse/ARCHIVE-22186
 		cltest.AssertPipelineRunsStays(t, jb.PipelineSpecID, db, 0)
 	})
 
 	t.Run("triggers if heads are skipped but later heads arrive within range", func(t *testing.T) {
-		db, config, ethMock, executer, registry, upkeep, job, jpv2, txm, _, _, _ := setup(t, mockEstimator(t), nil)
+		db, config, ethMock, executer, registry, upkeep, job, jpv2, txm, _, _, _ := setup(t, mockEstimator(t), func(c *chainlink.Config, s *chainlink.Secrets) {
+			c.EVM[0].ChainID = (*ubig.Big)(testutils.SimulatedChainID)
+		})
 
 		etxs := []cltest.Awaiter{
 			cltest.NewAwaiter(),
 			cltest.NewAwaiter(),
 		}
-		gasLimit := upkeep.ExecuteGas + config.KeeperRegistryPerformGasOverhead()
-		txm.On("CreateEthTransaction",
-			mock.MatchedBy(func(newTx txmgr.NewTx) bool { return newTx.GasLimit == gasLimit }),
+		gasLimit := uint64(5_000_000 + config.Keeper().Registry().PerformGasOverhead())
+		txm.On("CreateTransaction",
+			mock.Anything,
+			mock.MatchedBy(func(txRequest txmgr.TxRequest) bool { return txRequest.FeeLimit == gasLimit }),
 		).
 			Once().
-			Return(txmgr.EthTx{}, nil).
+			Return(txmgr.Tx{}, nil).
 			Run(func(mock.Arguments) { etxs[0].ItHappened() })
 
 		registryMock := cltest.NewContractMockReceiver(t, ethMock, keeper.Registry1_1ABI, registry.ContractAddress.Address())
@@ -305,9 +330,12 @@ func Test_UpkeepExecuter_PerformsUpkeep_Error(t *testing.T) {
 
 	g := gomega.NewWithT(t)
 
-	db, _, ethMock, executer, registry, _, _, _, _, _, _, _ := setup(t, mockEstimator(t), nil)
+	db, _, ethMock, executer, registry, _, _, _, _, _, _, _ := setup(t, mockEstimator(t),
+		func(c *chainlink.Config, s *chainlink.Secrets) {
+			c.EVM[0].ChainID = (*ubig.Big)(testutils.SimulatedChainID)
+		})
 
-	wasCalled := atomic.NewBool(false)
+	var wasCalled atomic.Bool
 	registryMock := cltest.NewContractMockReceiver(t, ethMock, keeper.Registry1_1ABI, registry.ContractAddress.Address())
 	registryMock.MockRevertResponse("checkUpkeep").Run(func(args mock.Arguments) {
 		wasCalled.Store(true)
@@ -317,7 +345,11 @@ func Test_UpkeepExecuter_PerformsUpkeep_Error(t *testing.T) {
 	executer.OnNewLongestChain(testutils.Context(t), &head)
 
 	g.Eventually(wasCalled.Load).Should(gomega.Equal(true))
-	cltest.AssertCountStays(t, db, "eth_txes", 0)
+
+	txStore := txmgr.NewTxStore(db, logger.TestLogger(t))
+	txes, err := txStore.GetAllTxes(testutils.Context(t))
+	require.NoError(t, err)
+	require.Len(t, txes, 0)
 }
 
 func ptr[T any](t T) *T { return &t }

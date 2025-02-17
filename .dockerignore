@@ -10,6 +10,7 @@ tmp/
 contracts/node_modules
 examples/
 
+deployment/
 integration/
 integration-scripts/
 integration-tests/
@@ -30,3 +31,6 @@ codeship-*.yml
 dockercfg
 credentials.env
 gcr_creds.env
+
+go.work
+go.work.sum

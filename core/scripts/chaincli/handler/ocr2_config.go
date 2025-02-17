@@ -11,14 +11,15 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/olekukonko/tablewriter"
-	"github.com/smartcontractkit/libocr/offchainreporting2/confighelper"
-	plugintypes "github.com/smartcontractkit/ocr2keepers/pkg/types"
 
-	"github.com/smartcontractkit/chainlink/core/gethwrappers/generated/keeper_registry_wrapper2_0"
+	"github.com/smartcontractkit/libocr/offchainreporting2plus/confighelper"
+
+	ocr2keepers20config "github.com/smartcontractkit/chainlink-automation/pkg/v2/config"
+
+	"github.com/smartcontractkit/chainlink/v2/core/gethwrappers/generated/keeper_registry_wrapper2_0"
 )
 
 func OCR2GetConfig(hdlr *baseHandler, registry_addr string) error {
-
 	b, err := common.ParseHexOrString(registry_addr)
 	if err != nil {
 		return fmt.Errorf("failed to parse address hash: %s", err)
@@ -52,7 +53,7 @@ func OCR2GetConfig(hdlr *baseHandler, registry_addr string) error {
 
 func configFromBlock(bl *types.Block, addr common.Address, detail keeper_registry_wrapper2_0.LatestConfigDetails) (*confighelper.PublicConfig, error) {
 	for _, tx := range bl.Transactions() {
-		if tx.To() != nil && bytes.Compare(tx.To()[:], addr[:]) == 0 {
+		if tx.To() != nil && bytes.Equal(tx.To()[:], addr[:]) {
 			// this is our transaction
 			// txRes, txErr, err := getTransactionDetailForHashes(hdlr, []string{tx})
 			ocr2Tx, err := NewBaseOCR2Tx(tx)
@@ -112,7 +113,7 @@ func printConfigValues(config *confighelper.PublicConfig) {
 	data = append(data, []string{"MaxDurationShouldTransmitAcceptedReport", config.MaxDurationShouldTransmitAcceptedReport.String()})
 	data = append(data, []string{"F", fmt.Sprintf("%v", config.F)})
 
-	if offConf, err := plugintypes.DecodeOffchainConfig(config.ReportingPluginConfig); err == nil {
+	if offConf, err := ocr2keepers20config.DecodeOffchainConfig(config.ReportingPluginConfig); err == nil {
 		data = append(data, []string{"", ""})
 		data = append(data, []string{"TargetProbability", offConf.TargetProbability})
 		data = append(data, []string{"GasLimitPerReport", fmt.Sprintf("%d", offConf.GasLimitPerReport)})
@@ -121,7 +122,6 @@ func printConfigValues(config *confighelper.PublicConfig) {
 		data = append(data, []string{"PerformLockoutWindow", fmt.Sprintf("%d", offConf.PerformLockoutWindow)})
 		data = append(data, []string{"SamplingJobDuration", fmt.Sprintf("%d", offConf.SamplingJobDuration)})
 		data = append(data, []string{"TargetInRounds", fmt.Sprintf("%d", offConf.TargetInRounds)})
-		data = append(data, []string{"UniqueReports", fmt.Sprintf("%t", offConf.UniqueReports)})
 	}
 
 	table := tablewriter.NewWriter(os.Stdout)

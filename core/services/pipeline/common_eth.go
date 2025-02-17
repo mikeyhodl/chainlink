@@ -14,7 +14,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/pkg/errors"
 
-	"github.com/smartcontractkit/chainlink/core/utils"
+	"github.com/smartcontractkit/chainlink/v2/core/utils"
 )
 
 var (
@@ -195,7 +195,6 @@ func convertToETHABIType(val interface{}, abiType abi.Type) (interface{}, error)
 
 	case abi.TupleTy:
 		return convertToETHABITuple(abiType, srcVal)
-
 	}
 	return nil, errors.Wrapf(ErrBadInput, "cannot convert %v to %v", srcVal.Type(), abiType)
 }

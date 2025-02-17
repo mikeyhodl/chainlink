@@ -27,15 +27,6 @@ func (n node) Prompt(p string) string {
 	return n.login
 }
 
-type nodeConfig struct {
-	ethAddress            string
-	p2pPeerID             string
-	ocr2BundleID          string
-	ocr2OnchainPublicKey  string
-	ocr2OffchainPublicKey string
-	ocr2ConfigPublicKey   string
-}
-
 func mustReadNodesList(path string) []*node {
 	fmt.Println("Reading nodes list from", path)
 
@@ -53,9 +44,6 @@ func mustReadNodesList(path string) []*node {
 		s := strings.Split(rr, " ")
 		if len(s) != 3 {
 			helpers.PanicErr(errors.New("wrong nodes list format"))
-		}
-		if !strings.HasPrefix(s[0], "https://") {
-			s[0] = "https://" + s[0]
 		}
 		if strings.Contains(s[0], "boot") && hasBoot {
 			helpers.PanicErr(errors.New("the single boot node must come first"))

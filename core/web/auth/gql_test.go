@@ -9,19 +9,20 @@ import (
 	"github.com/gin-contrib/sessions/cookie"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 
-	"github.com/smartcontractkit/chainlink/core/internal/cltest"
-	"github.com/smartcontractkit/chainlink/core/internal/testutils"
-	"github.com/smartcontractkit/chainlink/core/logger"
-	clsessions "github.com/smartcontractkit/chainlink/core/sessions"
-	"github.com/smartcontractkit/chainlink/core/sessions/mocks"
-	"github.com/smartcontractkit/chainlink/core/web/auth"
+	"github.com/smartcontractkit/chainlink/v2/core/internal/cltest"
+	"github.com/smartcontractkit/chainlink/v2/core/internal/testutils"
+	"github.com/smartcontractkit/chainlink/v2/core/logger"
+	clsessions "github.com/smartcontractkit/chainlink/v2/core/sessions"
+	"github.com/smartcontractkit/chainlink/v2/core/sessions/mocks"
+	"github.com/smartcontractkit/chainlink/v2/core/web/auth"
 )
 
 func Test_AuthenticateGQL_Unauthenticated(t *testing.T) {
 	t.Parallel()
 
-	sessionORM := &mocks.ORM{}
+	sessionORM := mocks.NewAuthenticationProvider(t)
 	sessionStore := cookie.NewStore([]byte("secret"))
 
 	r := gin.Default()
@@ -37,14 +38,14 @@ func Test_AuthenticateGQL_Unauthenticated(t *testing.T) {
 	})
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/", nil)
+	req := mustRequest(t, "GET", "/", nil)
 	r.ServeHTTP(w, req)
 }
 
 func Test_AuthenticateGQL_Authenticated(t *testing.T) {
 	t.Parallel()
 
-	sessionORM := &mocks.ORM{}
+	sessionORM := mocks.NewAuthenticationProvider(t)
 	sessionStore := cookie.NewStore([]byte(cltest.SessionSecret))
 	sessionID := "sessionID"
 
@@ -60,10 +61,10 @@ func Test_AuthenticateGQL_Authenticated(t *testing.T) {
 		c.String(http.StatusOK, "")
 	})
 
-	sessionORM.On("AuthorizedUserWithSession", sessionID).Return(clsessions.User{Email: cltest.APIEmailAdmin, Role: clsessions.UserRoleAdmin}, nil)
+	sessionORM.On("AuthorizedUserWithSession", mock.Anything, sessionID).Return(clsessions.User{Email: cltest.APIEmailAdmin, Role: clsessions.UserRoleAdmin}, nil)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/", nil)
+	req := mustRequest(t, "GET", "/", nil)
 	cookie := cltest.MustGenerateSessionCookie(t, sessionID)
 	req.AddCookie(cookie)
 
@@ -76,7 +77,7 @@ func Test_GetAndSetGQLAuthenticatedSession(t *testing.T) {
 	ctx := testutils.Context(t)
 	user := clsessions.User{Email: cltest.APIEmailAdmin, Role: clsessions.UserRoleAdmin}
 
-	ctx = auth.SetGQLAuthenticatedSession(ctx, user, "sessionID")
+	ctx = auth.WithGQLAuthenticatedSession(ctx, user, "sessionID")
 
 	actual, ok := auth.GetGQLAuthenticatedSession(ctx)
 	assert.True(t, ok)

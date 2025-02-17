@@ -3,10 +3,10 @@ package keys
 import (
 	"encoding/json"
 
-	keystore "github.com/ethereum/go-ethereum/accounts/keystore"
+	"github.com/ethereum/go-ethereum/accounts/keystore"
 	"github.com/pkg/errors"
 
-	"github.com/smartcontractkit/chainlink/core/utils"
+	"github.com/smartcontractkit/chainlink/v2/core/utils"
 )
 
 type Encrypted interface {
@@ -32,7 +32,6 @@ func FromEncryptedJSON[E Encrypted, K any](
 	passwordFunc func(string) string,
 	privKeyToKey func(export E, rawPrivKey []byte) (K, error),
 ) (K, error) {
-
 	// unmarshal byte data to [E] Encrypted key export
 	var export E
 	if err := json.Unmarshal(keyJSON, &export); err != nil {
@@ -62,9 +61,8 @@ func ToEncryptedJSON[E Encrypted, K any](
 	password string,
 	scryptParams utils.ScryptParams,
 	passwordFunc func(string) string,
-	buildExport func(id string, key K, cryptoJSON keystore.CryptoJSON) (E, error),
+	buildExport func(id string, key K, cryptoJSON keystore.CryptoJSON) E,
 ) (export []byte, err error) {
-
 	// encrypt data using prefixed password
 	cryptoJSON, err := keystore.EncryptDataV3(
 		raw,
@@ -77,10 +75,7 @@ func ToEncryptedJSON[E Encrypted, K any](
 	}
 
 	// build [E] export struct using encrypted key, identifier, and original key [K]
-	encryptedKeyExport, err := buildExport(identifier, key, cryptoJSON)
-	if err != nil {
-		return nil, errors.Wrapf(err, "could not build encrypted export for %s key", identifier)
-	}
+	encryptedKeyExport := buildExport(identifier, key, cryptoJSON)
 
 	return json.Marshal(encryptedKeyExport)
 }

@@ -5,11 +5,13 @@ import (
 	"testing"
 
 	"github.com/shopspring/decimal"
-	"github.com/smartcontractkit/chainlink/core/services/fluxmonitorv2"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/smartcontractkit/chainlink/v2/core/services/fluxmonitorv2"
 )
 
 func TestSubmissionChecker_IsValid(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name   string
 		answer decimal.Decimal

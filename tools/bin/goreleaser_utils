@@ -1,74 +1,95 @@
 #!/usr/bin/env bash
-
-# get machine / kernel name
-_get_platform() {
-  uname | tr '[:upper:]' '[:lower:]'
-}
-
-# get machine architecture name
-# See https://github.com/joschi/asdf-java/blob/aarch64-support/bin/functions#L33
-_get_arch() {
-  arch="$(uname -m)"
-  case "${arch}" in
-  x86_64 | amd64) echo "x86_64" ;;
-  aarch64 | arm64) echo "arm64" ;;
-  *)
-    echo "Unknown machine architecture: ${arch}"
-    exit 1
-    ;;
-  esac
-}
-
-# get lib wasmvm path
-_get_wasmvm_lib_path() {
-  local -r platform="$1"
-  local -r arch="$2"
-  wasmvm_dir=$(go list -json -m all | jq -r '. | select(.Path == "github.com/CosmWasm/wasmvm") | .Dir')
-  shared_lib_dir="$wasmvm_dir/api"
-  lib_name="libwasmvm"
-  if [ "$platform" == "darwin" ]; then
-    lib_extension="dylib"
-  elif [ "$platform" == "linux" ]; then
-    case "${arch}" in
-    x86_64 | amd64) lib_extension="x86_64.so" ;;
-    aarch64 | arm64) lib_extension="aarch64.so" ;;
-    *) echo "Unsupported arch $arch" && exit 1 ;;
-    esac
-  else
-    echo "Unsupported platform $platform"
-    exit 1
-  fi
-  echo "$shared_lib_dir/${lib_name}.$lib_extension"
-}
+set -xe
 
 # global goreleaser before hook
 # moves native libraries to temp directories used by docker images / archives
 before_hook() {
-  local -r lib_path=tmp
-  local -r wasmvm_lib_path_linux_amd64=$(_get_wasmvm_lib_path "linux" "amd64")
-  local -r wasmvm_lib_path_linux_arm64=$(_get_wasmvm_lib_path "linux" "arm64")
-  local -r wasmvm_lib_path_darwin_amd64=$(_get_wasmvm_lib_path "darwin" "amd64")
-  local -r wasmvm_lib_path_darwin_arm64=$(_get_wasmvm_lib_path "darwin" "arm64")
-  mkdir -p "$lib_path/linux_amd64/libs"
-  cp -f "$wasmvm_lib_path_linux_amd64" "$lib_path/linux_amd64/libs"
-  mkdir -p "$lib_path/linux_arm64/libs"
-  cp -f "$wasmvm_lib_path_linux_arm64" "$lib_path/linux_arm64/libs"
-  mkdir -p "$lib_path/darwin_amd64/libs"
-  cp -f "$wasmvm_lib_path_darwin_amd64" "$lib_path/darwin_amd64/libs"
-  mkdir -p "$lib_path/darwin_arm64/libs"
-  cp -f "$wasmvm_lib_path_darwin_arm64" "$lib_path/darwin_arm64/libs"
+  local -r lib_path=$PWD/tmp
+
+  install_local_plugins
+  install_remote_plugins
+  mkdir -p "$lib_path/libs"
+  # Copy over all platform versions of the wasmvm library
+  cp -f "$(go env GOMODCACHE)"/github.com/\!cosm\!wasm/wasmvm@v*/internal/api/libwasmvm.* "$lib_path/libs"
+  mkdir -p "$lib_path/plugins"
+  build_standard_capabilities
+
+  # Retrieve GOPATH
+  GOPATH=$(go env GOPATH)
+  GOARCH=$(go env GOARCH)
+
+  # Define the source directories
+  BIN_DIR="$GOPATH/bin"
+  PLUGIN_DIR="$lib_path/plugins"
+
+  # Because we still do cross compilation in the case of
+  # darwin_arm64 -> linux_arm64, the plugin path will have a suffix of
+  # linux_arm64, rather than being suffixless on native platforms
+  if [ "$GOARCH" = "arm64" ]; then
+    if [ -d "$BIN_DIR/linux_arm64" ]; then
+      cp "$BIN_DIR/linux_arm64"/chainlink* "$PLUGIN_DIR"
+    elif [ -d "$BIN_DIR/linux_arm64_v8.0" ]; then
+      cp "$BIN_DIR/linux_arm64_v8.0"/chainlink* "$PLUGIN_DIR"
+    else
+      cp "$BIN_DIR"/chainlink* "$PLUGIN_DIR"
+    fi
+    # Call patchelf --set-interpreter on all plugins
+    for plugin in "$PLUGIN_DIR"/chainlink*; do
+      patchelf --set-interpreter /lib/ld-linux-aarch64.so.1 "$plugin"
+    done
+
+  else
+    cp "$BIN_DIR"/chainlink* "$PLUGIN_DIR"
+
+    # Call patchelf --set-interpreter on all plugins
+    for plugin in "$PLUGIN_DIR"/chainlink*; do
+      patchelf --set-interpreter /lib64/ld-linux-x86-64.so.2 "$plugin"
+    done
+  fi
+
+}
+
+install_local_plugins() {
+  make install-medianpoc
+  make install-ocr3-capability
+}
+
+build_standard_capabilities() {
+  echo "Building standard capabilities"
+  cpath=./capabilities
+  if [ ! -z "$CAPABILITIES_REPO" ]; then
+    echo "Using capabilities repo at $CAPABILITIES_REPO"
+    cpath=$CAPABILITIES_REPO
+  fi
+  pushd "$cpath"
+  
+  npx nx@19.8.2 init
+  ./nx run-many -t build
+  # binaries get put into /bin under /bin/amd64/ and /bin/arm64/
+  cp "./bin/$(go env GOARCH)"/* "$lib_path/plugins" 
+  popd
+}
+
+install_remote_plugins() {
+  make install-plugins
 }
 
 # binary build post hook
 # moves native libraries to binary libs directory
 build_post_hook() {
   local -r dist_path=$1
-  local -r lib_path=$dist_path/libs
-  local -r platform=$2
-  local -r arch=$3
-  local -r wasmvm_lib_path=$(_get_wasmvm_lib_path "$platform" "$arch")
-  mkdir -p "$lib_path"
-  cp "$wasmvm_lib_path" "$lib_path"
+  local -r plugin_src_path=./tmp/plugins
+  local -r wasmvm_lib_path=./tmp/libs
+  local -r lib_dest_path=$dist_path/libs
+  local -r plugin_dest_path=$dist_path/plugins
+
+  # COPY NATIVE LIBRARIES HERE
+  mkdir -p "$lib_dest_path"
+  cp -r "$wasmvm_lib_path/." "$lib_dest_path"
+
+  # COPY PLUGINS HERE
+  mkdir -p "$plugin_dest_path"
+  cp -r "$plugin_src_path/." "$plugin_dest_path"
 }
 
 "$@"

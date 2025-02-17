@@ -11,7 +11,7 @@ import (
 
 	"github.com/smartcontractkit/chainlink/core/scripts/chaincli/config"
 	"github.com/smartcontractkit/chainlink/core/scripts/chaincli/handler"
-	"github.com/smartcontractkit/chainlink/core/services/keeper"
+	"github.com/smartcontractkit/chainlink/v2/core/services/keeper"
 )
 
 // upkeepEventsCmd represents the command to run the upkeep events counter command
@@ -82,14 +82,11 @@ var ocr2UpkeepReportHistoryCmd = &cobra.Command{
 		hdlr := handler.NewBaseHandler(cfg)
 
 		var hashes []string
-		var err error
-		var path string
-
-		path, err = cmd.Flags().GetString("csv")
+		path, err := cmd.Flags().GetString("csv")
 		if err == nil && len(path) != 0 {
-			rec, err := readCsvFile(path)
-			if err != nil {
-				log.Fatal(err)
+			rec, err2 := readCsvFile(path)
+			if err2 != nil {
+				log.Fatal(err2)
 			}
 
 			if len(rec) < 1 {
@@ -107,7 +104,7 @@ var ocr2UpkeepReportHistoryCmd = &cobra.Command{
 			}
 		}
 
-		if err := handler.OCR2AutomationReports(hdlr, hashes); err != nil {
+		if err = handler.OCR2AutomationReports(hdlr, hashes); err != nil {
 			log.Fatalf("failed to collect transaction data: %s", err)
 		}
 	},

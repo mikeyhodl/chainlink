@@ -1,46 +1,47 @@
 package ocr2keeper
 
 import (
+	"context"
 	"fmt"
-	"math/big"
 
-	kchain "github.com/smartcontractkit/ocr2keepers/pkg/chain"
-	ktypes "github.com/smartcontractkit/ocr2keepers/pkg/types"
-	"github.com/smartcontractkit/sqlx"
+	ocrtypes "github.com/smartcontractkit/libocr/offchainreporting2plus/types"
 
-	"github.com/smartcontractkit/chainlink-relay/pkg/types"
-	"github.com/smartcontractkit/chainlink/core/chains/evm"
-	"github.com/smartcontractkit/chainlink/core/logger"
-	"github.com/smartcontractkit/chainlink/core/services/job"
-	"github.com/smartcontractkit/chainlink/core/services/keystore/keys/ethkey"
-	kevm "github.com/smartcontractkit/chainlink/core/services/ocr2/plugins/ocr2keeper/evm"
-	"github.com/smartcontractkit/chainlink/core/services/pipeline"
-	evmrelay "github.com/smartcontractkit/chainlink/core/services/relay/evm"
+	ocr2keepers20 "github.com/smartcontractkit/chainlink-automation/pkg/v2"
+	ocr2keepers20coordinator "github.com/smartcontractkit/chainlink-automation/pkg/v2/coordinator"
+	ocr2keepers20polling "github.com/smartcontractkit/chainlink-automation/pkg/v2/observer/polling"
+	ocr2keepers20runner "github.com/smartcontractkit/chainlink-automation/pkg/v2/runner"
+	"github.com/smartcontractkit/chainlink-common/pkg/sqlutil"
+	"github.com/smartcontractkit/chainlink-common/pkg/types"
+	ocr2keepers21 "github.com/smartcontractkit/chainlink-common/pkg/types/automation"
+
+	evmtypes "github.com/smartcontractkit/chainlink-integrations/evm/types"
+	"github.com/smartcontractkit/chainlink/v2/core/chains/legacyevm"
+	"github.com/smartcontractkit/chainlink/v2/core/logger"
+	"github.com/smartcontractkit/chainlink/v2/core/services/job"
+	"github.com/smartcontractkit/chainlink/v2/core/services/keystore"
+	evmregistry20 "github.com/smartcontractkit/chainlink/v2/core/services/ocr2/plugins/ocr2keeper/evmregistry/v20"
+	evmregistry21 "github.com/smartcontractkit/chainlink/v2/core/services/ocr2/plugins/ocr2keeper/evmregistry/v21"
+	evmregistry21transmit "github.com/smartcontractkit/chainlink/v2/core/services/ocr2/plugins/ocr2keeper/evmregistry/v21/transmit"
+	evmrelay "github.com/smartcontractkit/chainlink/v2/core/services/relay/evm"
 )
 
-var (
-	ErrNoChainFromSpec = fmt.Errorf("could not create chain from spec")
-)
-
-func EVMChainForSpec(spec job.Job, set evm.ChainSet) (evm.Chain, error) {
-	chainIDInterface, ok := spec.OCR2OracleSpec.RelayConfig["chainID"]
-	if !ok {
-		return nil, fmt.Errorf("%w: chainID must be provided in relay config", ErrNoChainFromSpec)
-	}
-	chainID := int64(chainIDInterface.(float64))
-	chain, err := set.Get(big.NewInt(chainID))
-	if err != nil {
-		return nil, fmt.Errorf("%w: %s", ErrNoChainFromSpec, err)
-	}
-
-	return chain, nil
+type Encoder20 interface {
+	ocr2keepers20.Encoder
+	ocr2keepers20coordinator.Encoder
+	ocr2keepers20polling.Encoder
+	ocr2keepers20runner.Encoder
+	ocr2keepers20coordinator.Encoder
 }
 
-func EVMProvider(db *sqlx.DB, chain evm.Chain, lggr logger.Logger, spec job.Job, pr pipeline.Runner) (evmrelay.OCR2KeeperProvider, error) {
-	oSpec := spec.OCR2OracleSpec
-	ocr2keeperRelayer := evmrelay.NewOCR2KeeperRelayer(db, chain, pr, spec, lggr.Named("OCR2KeeperRelayer"))
+type Encoder21 interface {
+	ocr2keepers21.Encoder
+}
 
-	keeperProvider, err := ocr2keeperRelayer.NewOCR2KeeperProvider(
+func EVMProvider(ctx context.Context, ds sqlutil.DataSource, chain legacyevm.Chain, lggr logger.Logger, spec job.Job, ethKeystore keystore.Eth) (evmrelay.OCR2KeeperProvider, error) {
+	oSpec := spec.OCR2OracleSpec
+	ocr2keeperRelayer := evmrelay.NewOCR2KeeperRelayer(ds, chain, lggr.Named("OCR2KeeperRelayer"), ethKeystore)
+
+	keeperProvider, err := ocr2keeperRelayer.NewOCR2KeeperProvider(ctx,
 		types.RelayArgs{
 			ExternalJobID: spec.ExternalJobID,
 			JobID:         oSpec.ID,
@@ -59,36 +60,58 @@ func EVMProvider(db *sqlx.DB, chain evm.Chain, lggr logger.Logger, spec job.Job,
 	return keeperProvider, nil
 }
 
-func EVMDependencies(spec job.Job, db *sqlx.DB, lggr logger.Logger, set evm.ChainSet, pr pipeline.Runner) (evmrelay.OCR2KeeperProvider, *kevm.EvmRegistry, ktypes.ReportEncoder, *LogProvider, error) {
+func EVMDependencies20(
+	ctx context.Context,
+	spec job.Job,
+	ds sqlutil.DataSource,
+	lggr logger.Logger,
+	chain legacyevm.Chain,
+	ethKeystore keystore.Eth,
+) (evmrelay.OCR2KeeperProvider, *evmregistry20.EvmRegistry, Encoder20, *evmregistry20.LogProvider, error) {
 	var err error
-	var chain evm.Chain
+
 	var keeperProvider evmrelay.OCR2KeeperProvider
-	var registry *kevm.EvmRegistry
-	var encoder ktypes.ReportEncoder
-
-	oSpec := spec.OCR2OracleSpec
-
-	// get the chain from the config
-	if chain, err = EVMChainForSpec(spec, set); err != nil {
-		return nil, nil, nil, nil, err
-	}
+	var registry *evmregistry20.EvmRegistry
 
 	// the provider will be returned as a dependency
-	if keeperProvider, err = EVMProvider(db, chain, lggr, spec, pr); err != nil {
+	if keeperProvider, err = EVMProvider(ctx, ds, chain, lggr, spec, ethKeystore); err != nil {
 		return nil, nil, nil, nil, err
 	}
 
-	rAddr := ethkey.MustEIP55Address(oSpec.ContractID).Address()
-	if registry, err = kevm.NewEVMRegistryServiceV2_0(rAddr, chain, lggr); err != nil {
+	rAddr := evmtypes.MustEIP55Address(spec.OCR2OracleSpec.ContractID).Address()
+	if registry, err = evmregistry20.NewEVMRegistryService(rAddr, chain, lggr); err != nil {
 		return nil, nil, nil, nil, err
 	}
 
-	encoder = kchain.NewEVMReportEncoder()
+	encoder := evmregistry20.EVMAutomationEncoder20{}
 
 	// lookback blocks is hard coded and should provide ample time for logs
 	// to be detected in most cases
-	var lookbackBlocks int64 = 100
-	logProvider, err := NewLogProvider(lggr, chain.LogPoller(), rAddr, chain.Client(), lookbackBlocks)
+	var lookbackBlocks int64 = 250
+	// TODO: accept a version of the registry contract and use the correct interfaces
+	logProvider, err := evmregistry20.NewLogProvider(ctx, lggr, chain.LogPoller(), rAddr, chain.Client(), lookbackBlocks)
 
 	return keeperProvider, registry, encoder, logProvider, err
+}
+
+func FilterNamesFromSpec20(spec *job.OCR2OracleSpec) (names []string, err error) {
+	addr, err := evmtypes.NewEIP55Address(spec.ContractID)
+	if err != nil {
+		return nil, err
+	}
+	return []string{evmregistry20.LogProviderFilterName(addr.Address()), evmregistry20.UpkeepFilterName(addr.Address())}, err
+}
+
+func EVMDependencies21(
+	keyring ocrtypes.OnchainKeyring,
+) (evmregistry21.AutomationServices, error) {
+	return evmregistry21.New(keyring)
+}
+
+func FilterNamesFromSpec21(spec *job.OCR2OracleSpec) (names []string, err error) {
+	addr, err := evmtypes.NewEIP55Address(spec.ContractID)
+	if err != nil {
+		return nil, err
+	}
+	return []string{evmregistry21transmit.EventProviderFilterName(addr.Address()), evmregistry21.RegistryUpkeepFilterName(addr.Address())}, err
 }

@@ -10,9 +10,9 @@ import (
 
 	"github.com/urfave/cli"
 
+	ubig "github.com/smartcontractkit/chainlink-integrations/evm/utils/big"
 	helpers "github.com/smartcontractkit/chainlink/core/scripts/common"
-	"github.com/smartcontractkit/chainlink/core/utils"
-	"github.com/smartcontractkit/chainlink/core/web/presenters"
+	"github.com/smartcontractkit/chainlink/v2/core/web/presenters"
 )
 
 type ocr2Bundle struct {
@@ -23,12 +23,12 @@ type ocr2Bundle struct {
 	ConfigPublicKey   string `json:"configPublicKey"`
 }
 
-func mustFetchNodesKeys(chainID int64, nodes []*node) (nca []*nodeConfig) {
-	for _, node := range nodes {
+func mustFetchNodesKeys(chainID int64, nodes []*node) (nca []NodeKeys) {
+	for _, n := range nodes {
 		output := &bytes.Buffer{}
-		client, app := newApp(node, output)
+		client, app := newApp(n, output)
 
-		fmt.Println("Logging in:", node.url)
+		fmt.Println("Logging in:", n.url)
 		loginFs := flag.NewFlagSet("test", flag.ContinueOnError)
 		loginFs.Bool("bypass-version-check", true, "")
 		loginCtx := cli.NewContext(app, loginFs, nil)
@@ -68,20 +68,39 @@ func mustFetchNodesKeys(chainID int64, nodes []*node) (nca []*nodeConfig) {
 		if ocr2BundleIndex == -1 {
 			helpers.PanicErr(errors.New("node must have EVM OCR2 bundle"))
 		}
-		ocr2Bundle := ocr2Bundles[ocr2BundleIndex]
+		ocr2Bndl := ocr2Bundles[ocr2BundleIndex]
+		output.Reset()
 
-		nc := &nodeConfig{
-			ethAddress:            ethAddress,
-			p2pPeerID:             peerID,
-			ocr2BundleID:          ocr2Bundle.ID,
-			ocr2ConfigPublicKey:   strings.TrimPrefix(ocr2Bundle.ConfigPublicKey, "ocr2cfg_evm_"),
-			ocr2OnchainPublicKey:  strings.TrimPrefix(ocr2Bundle.OnchainPublicKey, "ocr2on_evm_"),
-			ocr2OffchainPublicKey: strings.TrimPrefix(ocr2Bundle.OffchainPublicKey, "ocr2off_evm_"),
+		err = client.ListCSAKeys(&cli.Context{
+			App: app,
+		})
+		helpers.PanicErr(err)
+		var csaKeys []presenters.CSAKeyResource
+		helpers.PanicErr(json.Unmarshal(output.Bytes(), &csaKeys))
+		csaPubKey, err := findFirstCSAPublicKey(csaKeys)
+		helpers.PanicErr(err)
+		output.Reset()
+
+		nc := NodeKeys{
+			EthAddress:            ethAddress,
+			P2PPeerID:             peerID,
+			OCR2BundleID:          ocr2Bndl.ID,
+			OCR2ConfigPublicKey:   strings.TrimPrefix(ocr2Bndl.ConfigPublicKey, "ocr2cfg_evm_"),
+			OCR2OnchainPublicKey:  strings.TrimPrefix(ocr2Bndl.OnchainPublicKey, "ocr2on_evm_"),
+			OCR2OffchainPublicKey: strings.TrimPrefix(ocr2Bndl.OffchainPublicKey, "ocr2off_evm_"),
+			CSAPublicKey:          csaPubKey,
 		}
 
 		nca = append(nca, nc)
 	}
 	return
+}
+
+func findFirstCSAPublicKey(csaKeyResources []presenters.CSAKeyResource) (string, error) {
+	for _, r := range csaKeyResources {
+		return r.PubKey, nil
+	}
+	return "", errors.New("did not find any CSA Key Resources")
 }
 
 func findEvmOCR2Bundle(ocr2Bundles []ocr2Bundle) int {
@@ -95,7 +114,7 @@ func findEvmOCR2Bundle(ocr2Bundles []ocr2Bundle) int {
 
 func findFirstGoodEthKeyAddress(chainID int64, ethKeys []presenters.ETHKeyResource) (string, error) {
 	for _, ethKey := range ethKeys {
-		if ethKey.EVMChainID.Equal(utils.NewBigI(chainID)) && !ethKey.Disabled {
+		if ethKey.EVMChainID.Equal(ubig.NewI(chainID)) && !ethKey.Disabled {
 			if ethKey.EthBalance.IsZero() {
 				fmt.Println("WARN: selected ETH address has zero balance", ethKey.Address)
 			}

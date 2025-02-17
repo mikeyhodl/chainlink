@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"database/sql"
 	"net/http"
 
@@ -8,10 +9,10 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/pkg/errors"
 
-	"github.com/smartcontractkit/chainlink/core/auth"
-	"github.com/smartcontractkit/chainlink/core/bridges"
-	clsessions "github.com/smartcontractkit/chainlink/core/sessions"
-	"github.com/smartcontractkit/chainlink/core/static"
+	"github.com/smartcontractkit/chainlink/v2/core/auth"
+	"github.com/smartcontractkit/chainlink/v2/core/bridges"
+	clsessions "github.com/smartcontractkit/chainlink/v2/core/sessions"
+	"github.com/smartcontractkit/chainlink/v2/core/static"
 )
 
 const (
@@ -37,10 +38,10 @@ const (
 // Authenticator defines the interface to authenticate requests against a
 // datastore.
 type Authenticator interface {
-	AuthorizedUserWithSession(sessionID string) (clsessions.User, error)
-	FindExternalInitiator(eia *auth.Token) (*bridges.ExternalInitiator, error)
-	FindUser(email string) (clsessions.User, error)
-	FindUserByAPIToken(apiToken string) (clsessions.User, error)
+	AuthorizedUserWithSession(ctx context.Context, sessionID string) (clsessions.User, error)
+	FindExternalInitiator(ctx context.Context, eia *auth.Token) (*bridges.ExternalInitiator, error)
+	FindUser(ctx context.Context, email string) (clsessions.User, error)
+	FindUserByAPIToken(ctx context.Context, apiToken string) (clsessions.User, error)
 }
 
 // authMethod defines a method which can be used to authenticate a request. This
@@ -52,13 +53,14 @@ type authMethod func(ctx *gin.Context, store Authenticator) error
 //
 // Implements authMethod
 func AuthenticateBySession(c *gin.Context, authr Authenticator) error {
+	ctx := c.Request.Context()
 	session := sessions.Default(c)
 	sessionID, ok := session.Get(SessionIDKey).(string)
 	if !ok {
 		return auth.ErrorAuthFailed
 	}
 
-	user, err := authr.AuthorizedUserWithSession(sessionID)
+	user, err := authr.AuthorizedUserWithSession(ctx, sessionID)
 	if err != nil {
 		return err
 	}
@@ -74,15 +76,23 @@ var _ authMethod = AuthenticateBySession
 //
 // Implements authMethod
 func AuthenticateByToken(c *gin.Context, authr Authenticator) error {
+	ctx := c.Request.Context()
 	token := &auth.Token{
 		AccessKey: c.GetHeader(APIKey),
 		Secret:    c.GetHeader(APISecret),
 	}
+	if token.AccessKey == "" {
+		return auth.ErrorAuthFailed
+	}
+
+	if token.AccessKey == "" {
+		return auth.ErrorAuthFailed
+	}
 
 	// We need to first load the user row so we can compare tokens using the stored salt
-	user, err := authr.FindUserByAPIToken(token.AccessKey)
+	user, err := authr.FindUserByAPIToken(ctx, token.AccessKey)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) || errors.Is(err, clsessions.ErrUserSessionExpired) {
 			return auth.ErrorAuthFailed
 		}
 		return err
@@ -107,12 +117,13 @@ var _ authMethod = AuthenticateByToken
 //
 // Implements authMethod
 func AuthenticateExternalInitiator(c *gin.Context, store Authenticator) error {
+	ctx := c.Request.Context()
 	eia := &auth.Token{
 		AccessKey: c.GetHeader(static.ExternalInitiatorAccessKeyHeader),
 		Secret:    c.GetHeader(static.ExternalInitiatorSecretHeader),
 	}
 
-	ei, err := store.FindExternalInitiator(eia)
+	ei, err := store.FindExternalInitiator(ctx, eia)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return auth.ErrorAuthFailed
@@ -186,7 +197,7 @@ func GetAuthenticatedExternalInitiator(c *gin.Context) (*bridges.ExternalInitiat
 	return obj.(*bridges.ExternalInitiator), ok
 }
 
-// RequiresRunRole extracts the user object from the context, and asserts the the user's role is at least
+// RequiresRunRole extracts the user object from the context, and asserts the user's role is at least
 // 'run'
 func RequiresRunRole(handler func(*gin.Context)) func(*gin.Context) {
 	return func(c *gin.Context) {
@@ -205,7 +216,7 @@ func RequiresRunRole(handler func(*gin.Context)) func(*gin.Context) {
 	}
 }
 
-// RequiresEditRole extracts the user object from the context, and asserts the the user's role is at least
+// RequiresEditRole extracts the user object from the context, and asserts the user's role is at least
 // 'edit'
 func RequiresEditRole(handler func(*gin.Context)) func(*gin.Context) {
 	return func(c *gin.Context) {
@@ -224,7 +235,7 @@ func RequiresEditRole(handler func(*gin.Context)) func(*gin.Context) {
 	}
 }
 
-// RequiresAdminRole extracts the user object from the context, and asserts the the user's role is 'admin'
+// RequiresAdminRole extracts the user object from the context, and asserts the user's role is 'admin'
 func RequiresAdminRole(handler func(*gin.Context)) func(*gin.Context) {
 	return func(c *gin.Context) {
 		user, ok := GetAuthenticatedUser(c)
@@ -235,7 +246,8 @@ func RequiresAdminRole(handler func(*gin.Context)) func(*gin.Context) {
 		}
 		if user.Role != clsessions.UserRoleAdmin {
 			c.Abort()
-			jsonAPIError(c, http.StatusUnauthorized, errors.New("Unauthorized"))
+			addForbiddenErrorHeaders(c, "admin", string(user.Role), user.Email)
+			jsonAPIError(c, http.StatusForbidden, errors.New("Forbidden"))
 			return
 		}
 		handler(c)
