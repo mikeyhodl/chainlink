@@ -231,7 +231,7 @@ require (
 	github.com/gedex/inflector v0.0.0-20170307190818-16278e9db813 // indirect
 	github.com/gin-contrib/sse v0.1.0 // indirect
 	github.com/go-asn1-ber/asn1-ber v1.5.5 // indirect
-	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
+	github.com/go-jose/go-jose/v4 v4.1.6 // indirect
 	github.com/go-kit/kit v0.13.0 // indirect
 	github.com/go-kit/log v0.2.1 // indirect
 	github.com/go-logfmt/logfmt v0.6.0 // indirect
@@ -286,7 +286,7 @@ require (
 	github.com/jackpal/go-nat-pmp v1.0.2 // indirect
 	github.com/jmhodges/levigo v1.0.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/klauspost/compress v1.18.6 // indirect
+	github.com/klauspost/compress v1.18.7 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/kr/text v0.2.0 // indirect
